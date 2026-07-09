@@ -66,6 +66,14 @@ interface ConceptScore {
   evidence: string[];
 }
 
+interface LayerActivation {
+  layer: number;
+  concept_id: string;
+  label: string;
+  score: number;
+  polarity: ConceptPolarity;
+}
+
 interface JacobianLensInfo {
   available: boolean;
   status: string;
@@ -87,6 +95,7 @@ interface TraceFrame {
   proxy_concepts: ConceptScore[];
   jacobian_concepts: ConceptScore[];
   jacobian_tokens: string[];
+  layer_activations: LayerActivation[];
   action: "observe" | "blocked" | "rewrite";
   note: string | null;
 }
@@ -176,6 +185,7 @@ interface State {
   result: RunResponse | null;
   customResult: CustomLensResponse | null;
   replayCount: number;
+  inspectedStep: number | null;
   loading: boolean;
   error: string | null;
 }
@@ -218,6 +228,7 @@ const state: State = {
   result: null,
   customResult: null,
   replayCount: 999,
+  inspectedStep: null,
   loading: false,
   error: null
 };
@@ -629,6 +640,7 @@ function renderResults(): string {
 
   const response = state.result;
   const visibleFrames = response.frames.slice(0, state.replayCount);
+  const inspectedFrame = selectedTraceFrame(visibleFrames);
   return `
     <div class="border-b border-line p-4">
       <div class="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
@@ -651,11 +663,12 @@ function renderResults(): string {
       <div class="min-w-0 space-y-4">
         ${renderImpactPanel(response, visibleFrames)}
         ${response.mode === "rewrite" ? renderRewriteOutputs(response) : renderMonitorOutput(response)}
-        ${renderTrace(visibleFrames, "Activation Trace")}
+        ${renderActivationExplorer(response, visibleFrames, inspectedFrame)}
       </div>
       <div class="min-w-0 space-y-4">
         ${renderInterventions(response)}
-        ${renderReadoutPanel(visibleFrames)}
+        ${renderTokenInspector(inspectedFrame, response)}
+        ${renderReadoutPanel(inspectedFrame ? [inspectedFrame] : visibleFrames)}
       </div>
     </div>
   `;
@@ -858,53 +871,197 @@ function renderRewriteOutputs(response: RunResponse): string {
   `;
 }
 
-function renderTrace(frames: TraceFrame[], title: string): string {
-  const rows = frames.slice(0, 36);
+function selectedTraceFrame(frames: TraceFrame[]): TraceFrame | null {
+  if (!frames.length) return null;
+  if (state.inspectedStep !== null) {
+    const selected = frames.find((frame) => frame.step === state.inspectedStep);
+    if (selected) return selected;
+  }
+  return frames.at(-1) ?? null;
+}
+
+function renderActivationExplorer(
+  response: RunResponse,
+  frames: TraceFrame[],
+  selectedFrame: TraceFrame | null
+): string {
+  const layers = activationLayers(frames);
+  const selectedStep = selectedFrame?.step ?? frames.at(-1)?.step ?? 0;
+  if (!frames.length || !layers.length) {
+    return `
+      <section class="border border-line bg-field p-4">
+        <div class="mb-2 text-sm font-semibold">Layer Heatmap</div>
+        <p class="text-sm text-neutral-600">No activation frames available.</p>
+      </section>
+    `;
+  }
+
   return `
     <section class="border border-line">
-      <div class="flex items-center justify-between border-b border-line bg-field px-3 py-2">
-        <h3 class="text-sm font-semibold">${title}</h3>
-        <span class="font-mono text-xs text-neutral-500">${rows.length} frames</span>
+      <div class="flex flex-col gap-2 border-b border-line bg-field px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h3 class="text-sm font-semibold">Layer Heatmap</h3>
+          <p class="text-xs text-neutral-500">${frames.length} token states across ${layers.length} layers</p>
+        </div>
+        <div class="flex flex-wrap items-center gap-2 text-[11px] font-semibold">
+          <span class="border border-line bg-white px-2 py-0.5">threshold ${state.threshold.toFixed(2)}</span>
+          <span class="border border-line bg-white px-2 py-0.5">control L${response.engine.layer}</span>
+          <span class="border border-hazard bg-red-50 px-2 py-0.5 text-hazard">tripwire</span>
+        </div>
       </div>
-      <div class="trace-scroll overflow-x-auto p-3">
-        <div class="activation-grid min-w-[720px] text-xs">
-          <span class="font-semibold text-neutral-500">step</span>
-          <span class="font-semibold text-neutral-500">top</span>
-          <span class="font-semibold text-neutral-500">next</span>
-          <span class="font-semibold text-neutral-500">third</span>
-          <span class="font-semibold text-neutral-500">fourth</span>
-          <span class="font-semibold text-neutral-500">fifth</span>
-          <span class="font-semibold text-neutral-500">action</span>
-          ${rows.map(renderTraceRow).join("")}
+      <div class="trace-scroll max-h-[560px] overflow-auto p-3">
+        <div class="token-heatmap text-xs" style="grid-template-columns: 56px repeat(${frames.length}, minmax(34px, 44px));">
+          <div class="heatmap-corner">layer</div>
+          ${frames.map((frame) => renderTokenHeader(frame, selectedStep)).join("")}
+          ${layers
+            .map(
+              (layer) => `
+                <div class="heatmap-layer-label ${layer === response.engine.layer ? "is-control" : ""}">L${layer}</div>
+                ${frames.map((frame) => renderHeatmapCell(frame, layer, selectedStep, response.engine.layer)).join("")}
+              `
+            )
+            .join("")}
         </div>
       </div>
     </section>
   `;
 }
 
-function renderTraceRow(frame: TraceFrame): string {
-  const cells = Array.from({ length: 5 }).map((_, index) => {
-    const score = frame.top_concepts[index];
-    if (!score) {
-      return `<span class="activation-cell" style="--score: 0; --cell-color: rgba(115,115,115,0.2);" title=""></span>`;
-    }
-    return `
-      <span class="activation-cell" style="--score: ${score.score}; --cell-color: ${cellColor(score)};" title="${escapeHtml(score.label)} ${score.score.toFixed(2)}">
-        <span class="sr-only">${escapeHtml(score.label)} ${score.score.toFixed(2)}</span>
-      </span>
-    `;
+function activationLayers(frames: TraceFrame[]): number[] {
+  const layers = new Set<number>();
+  frames.forEach((frame) => {
+    frame.layer_activations?.forEach((activation) => layers.add(activation.layer));
   });
+  return Array.from(layers).sort((left, right) => left - right);
+}
+
+function renderTokenHeader(frame: TraceFrame, selectedStep: number): string {
+  const selected = frame.step === selectedStep;
+  const label = tokenLabel(frame);
   return `
-    <span class="font-mono text-neutral-600">${frame.step}</span>
-    ${cells.join("")}
-    <span class="truncate font-mono ${actionTextClass(frame.action)}">${escapeHtml(frame.action)}</span>
+    <button
+      type="button"
+      data-frame-step="${frame.step}"
+      class="heatmap-token ${selected ? "is-selected" : ""} ${frame.action !== "observe" ? `is-${frame.action}` : ""}"
+      title="step ${frame.step}: ${escapeHtml(label)}"
+    >
+      <span class="font-mono text-[10px]">${frame.phase === "prompt" ? "P" : frame.step}</span>
+      <span class="truncate">${escapeHtml(label)}</span>
+    </button>
   `;
 }
 
-function cellColor(score: ConceptScore): string {
-  if (score.polarity === "risk") return "rgba(180,35,24,0.82)";
-  if (score.polarity === "target") return "rgba(15,118,110,0.82)";
-  return "rgba(47,111,159,0.7)";
+function renderHeatmapCell(
+  frame: TraceFrame,
+  layer: number,
+  selectedStep: number,
+  controlLayer: number
+): string {
+  const activation = frame.layer_activations?.find((item) => item.layer === layer);
+  if (!activation) {
+    return `<button type="button" data-frame-step="${frame.step}" class="heatmap-cell is-empty" title="step ${frame.step} layer ${layer}"></button>`;
+  }
+  const selected = frame.step === selectedStep;
+  const tripwire = isTripwireActivation(activation);
+  const classes = [
+    "heatmap-cell",
+    selected ? "is-selected" : "",
+    tripwire ? "is-tripwire" : "",
+    layer === controlLayer ? "is-control-layer" : ""
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return `
+    <button
+      type="button"
+      data-frame-step="${frame.step}"
+      class="${classes}"
+      style="--score: ${activation.score}; --cell-color: ${cellColor(activation)};"
+      title="step ${frame.step} layer ${layer}: ${escapeHtml(activation.label)} ${activation.score.toFixed(2)}"
+    >
+      <span class="sr-only">${escapeHtml(activation.label)} ${activation.score.toFixed(2)}</span>
+    </button>
+  `;
+}
+
+function renderTokenInspector(frame: TraceFrame | null, response: RunResponse): string {
+  if (!frame) {
+    return `
+      <section class="border border-line bg-field p-4">
+        <div class="text-sm font-semibold">Token Inspector</div>
+      </section>
+    `;
+  }
+  const strongest = [...(frame.layer_activations ?? [])].sort((left, right) => right.score - left.score).slice(0, 6);
+  const tripwires = strongest.filter(isTripwireActivation);
+  return `
+    <section class="border border-line">
+      <div class="border-b border-line bg-field px-3 py-2">
+        <div class="flex items-center justify-between gap-3">
+          <h3 class="text-sm font-semibold">Token Inspector</h3>
+          <span class="font-mono text-xs ${actionTextClass(frame.action)}">${escapeHtml(frame.action)}</span>
+        </div>
+      </div>
+      <div class="space-y-3 p-3">
+        <div class="border border-line bg-white p-3">
+          <div class="mb-1 flex items-center justify-between gap-3">
+            <span class="font-mono text-xs text-neutral-500">step ${frame.step} / ${frame.phase}</span>
+            <span class="font-mono text-xs">L${response.engine.layer}</span>
+          </div>
+          <div class="break-words text-sm font-semibold">${escapeHtml(tokenLabel(frame))}</div>
+          ${frame.note ? `<p class="mt-2 text-xs leading-5 text-neutral-600">${escapeHtml(frame.note)}</p>` : ""}
+        </div>
+        <div class="border border-line bg-white">
+          <div class="border-b border-line px-2 py-1.5 text-xs font-semibold">Tripwire Layers</div>
+          ${
+            tripwires.length
+              ? tripwires.map(renderLayerActivationRow).join("")
+              : `<div class="p-2 text-xs text-neutral-500">No risk layer crosses ${state.threshold.toFixed(2)} for this token.</div>`
+          }
+        </div>
+        <div class="border border-line bg-white">
+          <div class="border-b border-line px-2 py-1.5 text-xs font-semibold">Strongest Layers</div>
+          ${strongest.length ? strongest.map(renderLayerActivationRow).join("") : `<div class="p-2 text-xs text-neutral-500">No layer scan.</div>`}
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderLayerActivationRow(activation: LayerActivation): string {
+  const tripwire = isTripwireActivation(activation);
+  return `
+    <div class="border-b border-line p-2 last:border-b-0 ${tripwire ? "bg-red-50" : ""}">
+      <div class="mb-1 flex items-center justify-between gap-2">
+        <span class="font-mono text-[11px] ${tripwire ? "text-hazard" : "text-neutral-500"}">L${activation.layer}</span>
+        <span class="font-mono text-[11px]">${activation.score.toFixed(2)}</span>
+      </div>
+      <div class="mb-1.5 flex items-center justify-between gap-2">
+        <span class="truncate text-xs font-semibold">${escapeHtml(activation.label)}</span>
+        ${tripwire ? `<span class="border border-hazard bg-white px-1 py-0.5 text-[10px] font-semibold text-hazard">TRIP</span>` : ""}
+      </div>
+      <div class="h-1.5 border border-line bg-field">
+        <div class="h-full ${activation.polarity === "risk" ? "bg-hazard" : "bg-signal"}" style="width: ${Math.round(activation.score * 100)}%"></div>
+      </div>
+    </div>
+  `;
+}
+
+function tokenLabel(frame: TraceFrame): string {
+  if (frame.phase === "prompt") return "<prompt>";
+  const token = frame.token || "";
+  if (!token.trim()) return "[space]";
+  return token.replace(/\s+/g, " ");
+}
+
+function isTripwireActivation(activation: Pick<LayerActivation | ConceptScore, "polarity" | "score">): boolean {
+  return activation.polarity === "risk" && activation.score >= state.threshold;
+}
+
+function cellColor(score: Pick<LayerActivation | ConceptScore, "polarity">): string {
+  if (score.polarity === "risk") return "rgba(180,35,24,0.86)";
+  if (score.polarity === "target") return "rgba(15,118,110,0.84)";
+  return "rgba(47,111,159,0.72)";
 }
 
 function actionTextClass(action: TraceFrame["action"]): string {
@@ -1002,11 +1159,16 @@ function renderReadoutLane(title: string, concepts: ConceptScore[], titleClass: 
             ? concepts
                 .slice(0, 4)
                 .map(
-                  (concept) => `
-                    <div class="p-2">
+                  (concept) => {
+                    const tripwire = isTripwireActivation(concept);
+                    return `
+                    <div class="p-2 ${tripwire ? "bg-red-50" : ""}">
                       <div class="mb-1.5 flex items-center justify-between gap-3">
                         <span class="truncate text-xs font-semibold">${escapeHtml(concept.label)}</span>
-                        <span class="font-mono text-[11px]">${concept.score.toFixed(2)}</span>
+                        <span class="inline-flex items-center gap-1 font-mono text-[11px]">
+                          ${tripwire ? `<span class="border border-hazard bg-white px-1 py-0.5 text-[10px] font-semibold text-hazard">TRIP</span>` : ""}
+                          ${concept.score.toFixed(2)}
+                        </span>
                       </div>
                       <div class="h-1.5 border border-line bg-field">
                         <div class="h-full ${concept.polarity === "risk" ? "bg-hazard" : "bg-signal"}" style="width: ${Math.round(concept.score * 100)}%"></div>
@@ -1015,7 +1177,8 @@ function renderReadoutLane(title: string, concepts: ConceptScore[], titleClass: 
                         ${concept.evidence.map((item) => `<span class="border border-line bg-field px-1 py-0.5 text-[10px] text-neutral-600">${escapeHtml(item)}</span>`).join("")}
                       </div>
                     </div>
-                  `
+                  `;
+                  }
                 )
                 .join("")
             : `<div class="p-2 text-xs text-neutral-500">No signal</div>`
@@ -1045,6 +1208,7 @@ function bindEvents() {
       }
       state.result = null;
       state.customResult = null;
+      state.inspectedStep = null;
       render();
     });
   });
@@ -1055,6 +1219,7 @@ function bindEvents() {
       if (scenario) {
         applyScenario(scenario);
         state.result = null;
+        state.inspectedStep = null;
         render();
       }
     });
@@ -1144,6 +1309,19 @@ function bindEvents() {
   document.querySelector<HTMLButtonElement>("#replay")?.addEventListener("click", () => {
     if (state.result) startReplay();
   });
+
+  document.querySelectorAll<HTMLElement>("[data-frame-step]").forEach((element) => {
+    const step = Number(element.dataset.frameStep);
+    if (!Number.isFinite(step)) return;
+    const inspect = () => {
+      if (state.inspectedStep === step) return;
+      state.inspectedStep = step;
+      render();
+    };
+    element.addEventListener("mouseenter", inspect);
+    element.addEventListener("focus", inspect);
+    element.addEventListener("click", inspect);
+  });
 }
 
 function bindInput(id: string, handler: (element: HTMLElement) => void) {
@@ -1176,6 +1354,7 @@ async function run() {
   state.error = null;
   state.result = null;
   state.customResult = null;
+  state.inspectedStep = null;
   stopReplay();
   render();
 
@@ -1197,6 +1376,7 @@ async function run() {
     });
     state.result = result;
     state.health = { ok: true, engine: result.engine };
+    state.inspectedStep = null;
     state.replayCount = 0;
     startReplay();
   } catch (error) {
@@ -1212,6 +1392,7 @@ async function runCustomLens() {
   state.error = null;
   state.result = null;
   state.customResult = null;
+  state.inspectedStep = null;
   stopReplay();
   render();
 
@@ -1226,6 +1407,7 @@ async function runCustomLens() {
     });
     state.customResult = result;
     state.health = { ok: true, engine: result.engine };
+    state.inspectedStep = null;
   } catch (error) {
     state.error = error instanceof Error ? error.message : "Custom lens failed";
   } finally {

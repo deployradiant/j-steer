@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import random
 import time
 import uuid
@@ -15,6 +16,7 @@ from .schemas import (
     EngineInfo,
     Intervention,
     JacobianLensInfo,
+    LayerActivation,
     RunMetrics,
     RunRequest,
     RunResponse,
@@ -73,6 +75,7 @@ class MockJSpaceEngine:
             proxy_concepts=proxy_scores,
             jacobian_concepts=jacobian_scores,
             jacobian_tokens=self._mock_jacobian_tokens(jacobian_scores),
+            layer_activations=self._mock_layer_activations(proxy_scores, step=0),
             action="observe",
             note="User-defined concept lens compared against a deterministic mock J-lens readout.",
         )
@@ -409,6 +412,7 @@ class MockJSpaceEngine:
             proxy_concepts=scores,
             jacobian_concepts=jacobian_scores,
             jacobian_tokens=self._mock_jacobian_tokens(jacobian_scores),
+            layer_activations=self._mock_layer_activations(scores, step=step),
             action=action,
             note=note,
         )
@@ -513,6 +517,36 @@ class MockJSpaceEngine:
             f"Generated {concept_count} custom concept directions; proxy top is {top_proxy.label}, "
             f"Jacobian top is {top_jacobian.label}, and the comparison {alignment}."
         )
+
+    def _mock_layer_activations(self, scores: list[ConceptScore], step: int) -> list[LayerActivation]:
+        rows: list[LayerActivation] = []
+        if not scores:
+            return rows
+        layer_count = 28
+        for layer in range(layer_count):
+            best: LayerActivation | None = None
+            for index, score in enumerate(scores):
+                if score.polarity == "risk":
+                    center = self.layer - 3 + index
+                elif score.polarity == "target":
+                    center = self.layer + 4 - index
+                else:
+                    center = self.layer + index - 1
+                band = math.exp(-abs(layer - center) / 7.5)
+                wave = 0.025 * math.sin((step + 1) * (layer + 1) * (index + 1))
+                value = max(0.04, min(0.99, score.score * (0.34 + 0.66 * band) + wave))
+                candidate = LayerActivation(
+                    layer=layer,
+                    concept_id=score.id,
+                    label=score.label,
+                    score=round(value, 3),
+                    polarity=score.polarity,
+                )
+                if best is None or candidate.score > best.score:
+                    best = candidate
+            if best is not None:
+                rows.append(best)
+        return rows
 
     def _mock_jacobian_scores(self, scores: list[ConceptScore]) -> list[ConceptScore]:
         jacobian_scores: list[ConceptScore] = []

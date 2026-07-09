@@ -39,6 +39,106 @@ select {
     #fff;
 }
 
+.token-heatmap {
+  display: grid;
+  gap: 4px;
+  align-items: stretch;
+  min-width: max-content;
+}
+
+.heatmap-corner,
+.heatmap-layer-label,
+.heatmap-token,
+.heatmap-cell {
+  min-height: 28px;
+  border: 1px solid rgba(23, 23, 23, 0.12);
+}
+
+.heatmap-corner,
+.heatmap-layer-label {
+  position: sticky;
+  left: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f8fafc;
+  font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 11px;
+  color: #525252;
+}
+
+.heatmap-corner,
+.heatmap-token {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+}
+
+.heatmap-corner {
+  z-index: 5;
+}
+
+.heatmap-layer-label.is-control {
+  border-color: #171717;
+  color: #171717;
+  font-weight: 700;
+}
+
+.heatmap-token {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+  overflow: hidden;
+  background: #fff;
+  padding: 2px 3px;
+  text-align: center;
+  color: #525252;
+}
+
+.heatmap-token.is-selected {
+  border-color: #171717;
+  color: #171717;
+  box-shadow: inset 0 -3px 0 #171717;
+}
+
+.heatmap-token.is-blocked {
+  border-color: #b42318;
+  color: #b42318;
+}
+
+.heatmap-token.is-rewrite {
+  border-color: #6d5dfc;
+  color: #4f46e5;
+}
+
+.heatmap-cell {
+  min-width: 34px;
+  background:
+    linear-gradient(180deg, var(--cell-color) calc(var(--score) * 100%), rgba(255, 255, 255, 0.88) 0),
+    #fff;
+}
+
+.heatmap-cell.is-empty {
+  background: repeating-linear-gradient(45deg, #f5f5f5, #f5f5f5 4px, #fff 4px, #fff 8px);
+}
+
+.heatmap-cell.is-control-layer {
+  border-color: rgba(23, 23, 23, 0.44);
+}
+
+.heatmap-cell.is-selected {
+  box-shadow: inset 0 0 0 2px #171717;
+}
+
+.heatmap-cell.is-tripwire {
+  border-color: #b42318;
+  box-shadow: inset 0 0 0 2px #b42318;
+}
+
 .trace-scroll {
   scrollbar-width: thin;
   scrollbar-color: #aab0b6 transparent;
@@ -52,4 +152,3 @@ select {
 .trace-scroll::-webkit-scrollbar-thumb {
   background: #aab0b6;
 }
-

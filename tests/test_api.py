@@ -32,6 +32,8 @@ def test_run_endpoint() -> None:
     assert body["frames"][0]["proxy_concepts"]
     assert body["frames"][0]["jacobian_concepts"]
     assert body["frames"][0]["jacobian_tokens"]
+    assert body["frames"][0]["layer_activations"]
+    assert {"layer", "label", "score", "polarity"}.issubset(body["frames"][0]["layer_activations"][0])
 
 
 def test_custom_lens_endpoint() -> None:
@@ -59,4 +61,5 @@ def test_custom_lens_endpoint() -> None:
     body = response.json()
     assert body["frame"]["proxy_concepts"]
     assert body["frame"]["jacobian_concepts"]
+    assert body["frame"]["layer_activations"]
     assert body["concepts"][0]["calibration_prompts"]

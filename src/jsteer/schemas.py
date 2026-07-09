@@ -19,6 +19,14 @@ class ConceptScore(BaseModel):
     evidence: list[str] = Field(default_factory=list)
 
 
+class LayerActivation(BaseModel):
+    layer: int = Field(ge=0)
+    concept_id: str
+    label: str
+    score: float = Field(ge=0.0, le=1.0)
+    polarity: ConceptPolarity = "neutral"
+
+
 class JacobianLensInfo(BaseModel):
     available: bool = False
     status: str = "configured"
@@ -40,6 +48,7 @@ class TraceFrame(BaseModel):
     proxy_concepts: list[ConceptScore] = Field(default_factory=list)
     jacobian_concepts: list[ConceptScore] = Field(default_factory=list)
     jacobian_tokens: list[str] = Field(default_factory=list)
+    layer_activations: list[LayerActivation] = Field(default_factory=list)
     action: FrameAction = "observe"
     note: str | None = None
 

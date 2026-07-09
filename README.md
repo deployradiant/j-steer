@@ -10,7 +10,7 @@ This repo now compares two latent readouts on an open Qwen model:
 - `Jacobian`: Anthropic's published `jlens` implementation with a pre-fitted Neuronpedia Qwen3-1.7B Jacobian lens. This transports the same residual into the final-layer basis, scores separately calibrated transported concept directions, and decodes top tokens/concept evidence.
 - `Control`: the proxy tripwire/steering score. The Jacobian lane is an independent readout for comparison, not a second kill switch.
 
-The demo opens on `Custom Lens`, where a user generates concept directions from keywords and compares them against the published Qwen3-1.7B Jacobian lens. The other tabs show the same readout machinery in control modes: `Tripwire` kills concerning trajectories before unsafe text is released, and `Rewrite` applies forward-hook activation edits to move generation toward enterprise policy attractors. The readout panel contrasts the proxy concept bank with the actual Jacobian lens on each frame.
+The demo opens on `Custom Lens`, where a user generates concept directions from keywords and compares them against the published Qwen3-1.7B Jacobian lens. The other tabs show the same readout machinery in control modes: `Tripwire` kills concerning trajectories before unsafe text is released, and `Rewrite` applies forward-hook activation edits to move generation toward enterprise policy attractors. Run traces include a token-by-layer activation heatmap; hover a produced token or heatmap cell to inspect the winning layer activations, highlighted tripwire layers, and Proxy/Jacobian readout for that token state.
 
 Rewrite profiles combine two controls: a hidden-state vector edit at the monitored layer and a decoder constraint that emits an approved control phrase. That keeps the demo crisp enough to record while still exposing the latent before/after trace.
 
@@ -81,7 +81,8 @@ Use the deployed app URL and record these three beats:
    - The result shows generated calibration prompts, proxy scores, Jacobian-transported scores, and agreement deltas for each user concept.
 2. `Tripwire` -> `Catch hidden prompt injection in retrieved content`
    - Run with `Kill`.
-   - The response should show `BLOCKED`, no released output, and a readout comparison between `Proxy` and `Jacobian`.
+   - The response should show `BLOCKED`, no released output, and a red tripwire band in the token-by-layer heatmap.
+   - Hover the prompt/token column to show the right-side token inspector and the `Proxy`/`Jacobian` readout for the selected state.
 3. `Rewrite` -> `Turn competitor drift into approved brand canon`
    - Run with the default rewrite profile.
    - The raw path drifts into generic launch copy, while the steered path emits the approved HeliosCRM canon sentence and shows forward-hook interventions in the ledger.

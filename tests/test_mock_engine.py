@@ -16,6 +16,7 @@ def test_monitor_blocks_credential_prompt() -> None:
 
     assert response.status == "blocked"
     assert response.frames[0].action == "blocked"
+    assert response.frames[0].layer_activations
     assert "Credential Exfiltration" in response.summary
 
 
@@ -32,5 +33,5 @@ def test_rewrite_has_baseline_and_interventions() -> None:
     assert response.status == "rewritten"
     assert response.baseline_output
     assert response.interventions
+    assert response.frames[0].layer_activations
     assert "HeliosCRM" in response.output
-

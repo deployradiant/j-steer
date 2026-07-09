@@ -18,6 +18,7 @@ from .schemas import (
     EngineInfo,
     Intervention,
     JacobianLensInfo,
+    LayerActivation,
     RunMetrics,
     RunRequest,
     RunResponse,
@@ -131,6 +132,11 @@ class HFJSpaceEngine:
             proxy_concepts=proxy_scores,
             jacobian_concepts=jacobian_scores,
             jacobian_tokens=jacobian_tokens,
+            layer_activations=self._custom_layer_activation_scan(
+                outputs.hidden_states,
+                custom_bank,
+                prompt_window=min(4, tail_count),
+            ),
             action="observe",
             note="User-defined concept lens scored in raw residual space and Jacobian-transported J-space.",
         )
@@ -345,6 +351,11 @@ class HFJSpaceEngine:
                 proxy_concepts=prompt_proxy,
                 jacobian_concepts=prompt_jacobian,
                 jacobian_tokens=prompt_jacobian_tokens,
+                layer_activations=self._layer_activation_scan(
+                    outputs.hidden_states,
+                    monitor_ids,
+                    prompt_window=min(4, int(prompt_hidden_states.shape[0])),
+                ),
                 action="observe",
                 note="Prompt boundary hidden state before the first decoded token.",
             )
@@ -521,6 +532,7 @@ class HFJSpaceEngine:
                         proxy_concepts=proxy_scores,
                         jacobian_concepts=jacobian_scores,
                         jacobian_tokens=jacobian_tokens,
+                        layer_activations=self._layer_activation_scan(outputs.hidden_states, monitor_ids),
                         action=action,
                         note=(
                             "Forward hook edited hidden state; decoder readout favored approved terms."
@@ -916,6 +928,91 @@ class HFJSpaceEngine:
         control_scores = proxy_scores
         return control_scores, proxy_scores, jacobian_scores, jacobian_tokens
 
+    def _layer_activation_scan(
+        self,
+        hidden_states: Any,
+        concept_ids: list[str],
+        prompt_window: int = 1,
+    ) -> list[LayerActivation]:
+        assert self.bank is not None and self.torch is not None
+        rows: list[LayerActivation] = []
+        for layer_index, layer_hidden in enumerate(hidden_states[1:]):
+            hidden = self._layer_vector(layer_hidden, prompt_window)
+            activation = self._top_layer_activation(hidden, concept_ids)
+            if activation is not None:
+                rows.append(activation.model_copy(update={"layer": layer_index}))
+        return rows
+
+    def _custom_layer_activation_scan(
+        self,
+        hidden_states: Any,
+        bank: list[_CustomConceptVector],
+        prompt_window: int = 1,
+    ) -> list[LayerActivation]:
+        rows: list[LayerActivation] = []
+        for layer_index, layer_hidden in enumerate(hidden_states[1:]):
+            hidden = self._layer_vector(layer_hidden, prompt_window)
+            activation = self._top_custom_layer_activation(hidden, bank)
+            if activation is not None:
+                rows.append(activation.model_copy(update={"layer": layer_index}))
+        return rows
+
+    def _layer_vector(self, layer_hidden: Any, prompt_window: int) -> Any:
+        if layer_hidden.ndim == 3:
+            layer_hidden = layer_hidden[0]
+        if layer_hidden.ndim == 2:
+            window = max(1, min(prompt_window, int(layer_hidden.shape[0])))
+            return layer_hidden[-window:].mean(dim=0).detach()
+        return layer_hidden.detach()
+
+    def _top_layer_activation(self, hidden: Any, concept_ids: list[str]) -> LayerActivation | None:
+        assert self.bank is not None
+        hidden_f = hidden.detach().float()
+        hidden_f = hidden_f / (hidden_f.norm() + 1e-6)
+        best: LayerActivation | None = None
+        for concept_id in concept_ids:
+            direction = self.bank.directions.get(concept_id)
+            concept = CONCEPTS.get(concept_id)
+            if direction is None or concept is None:
+                continue
+            score = self._direction_score(hidden_f, direction.to(hidden_f.device))
+            candidate = LayerActivation(
+                layer=0,
+                concept_id=concept.id,
+                label=concept.label,
+                score=round(score, 3),
+                polarity=concept.polarity,
+            )
+            if best is None or candidate.score > best.score:
+                best = candidate
+        return best
+
+    def _top_custom_layer_activation(
+        self,
+        hidden: Any,
+        bank: list[_CustomConceptVector],
+    ) -> LayerActivation | None:
+        hidden_f = hidden.detach().float()
+        hidden_f = hidden_f / (hidden_f.norm() + 1e-6)
+        best: LayerActivation | None = None
+        for concept in bank:
+            score = self._direction_score(hidden_f, concept.proxy_direction.to(hidden_f.device))
+            candidate = LayerActivation(
+                layer=0,
+                concept_id=concept.id,
+                label=concept.label,
+                score=round(score, 3),
+                polarity=concept.polarity,
+            )
+            if best is None or candidate.score > best.score:
+                best = candidate
+        return best
+
+    @staticmethod
+    def _direction_score(hidden: Any, direction: Any) -> float:
+        cosine = float((hidden * direction).sum().cpu())
+        return max(0.0, min(1.0, (cosine + 0.25) / 0.75))
+
     def _score_hidden(self, hidden: Any, concept_ids: list[str]) -> list[ConceptScore]:
         assert self.bank is not None and self.torch is not None
         scores: list[ConceptScore] = []
@@ -924,8 +1021,7 @@ class HFJSpaceEngine:
         for concept_id in concept_ids:
             concept = CONCEPTS[concept_id]
             direction = self.bank.directions[concept_id].to(hidden_f.device)
-            cosine = float((hidden_f * direction).sum().cpu())
-            score = max(0.0, min(1.0, (cosine + 0.25) / 0.75))
+            score = self._direction_score(hidden_f, direction)
             evidence = self._top_readout_tokens(hidden, concept)
             scores.append(
                 ConceptScore(
