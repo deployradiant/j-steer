@@ -1,0 +1,473 @@
+from __future__ import annotations
+
+import os
+import random
+import time
+import uuid
+from dataclasses import dataclass
+from typing import Any
+
+from .concepts import CONCEPTS, REWRITE_PROFILES, ConceptSpec, RewriteProfile
+from .schemas import (
+    ConceptScore,
+    EngineInfo,
+    Intervention,
+    RunMetrics,
+    RunRequest,
+    RunResponse,
+    TraceFrame,
+)
+
+
+@dataclass
+class _VectorBank:
+    directions: dict[str, Any]
+    target_layer: int
+
+
+class HFJSpaceEngine:
+    """Qwen hidden-state monitor and activation rewrite engine.
+
+    This is a practical J-space proxy: it reads mid-layer residual activations and scores them
+    against contrastive concept directions. Anthropic's paper uses a Jacobian lens on Claude;
+    open Qwen weights do not expose that exact private method, so this engine uses the same
+    operational idea with open-model hidden states and forward hooks.
+    """
+
+    mode = "hf"
+    readout = "mid-layer hidden-state cosine probes + forward-hook steering"
+
+    def __init__(self) -> None:
+        self.model_name = os.getenv("JSTEER_MODEL", "Qwen/Qwen3-0.6B")
+        self._loaded = False
+        self.model: Any | None = None
+        self.tokenizer: Any | None = None
+        self.torch: Any | None = None
+        self.device = "unloaded"
+        self.layer = int(os.getenv("JSTEER_LAYER", "-1"))
+        self.bank: _VectorBank | None = None
+
+    def info(self) -> EngineInfo:
+        return EngineInfo(
+            mode=self.mode,
+            model=self.model_name,
+            layer=max(self.layer, 0),
+            device=self.device,
+            readout=self.readout,
+        )
+
+    def run(self, request: RunRequest) -> RunResponse:
+        self._ensure_loaded()
+        started = time.perf_counter()
+        if request.mode == "rewrite":
+            response = self._run_rewrite(request)
+        else:
+            response = self._run_monitor(request)
+        response.metrics.latency_ms = int((time.perf_counter() - started) * 1000)
+        return response
+
+    def _ensure_loaded(self) -> None:
+        if self._loaded:
+            return
+        try:
+            import torch
+            from transformers import AutoModelForCausalLM, AutoTokenizer
+        except ImportError as exc:
+            raise RuntimeError(
+                "HF engine dependencies are missing. Run `uv sync --group dev` before serving."
+            ) from exc
+
+        self.torch = torch
+        dtype = "auto"
+        device_map: str | None = "auto"
+        if os.getenv("JSTEER_DEVICE", "").lower() == "cpu":
+            device_map = None
+
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_name, trust_remote_code=True)
+        self.model = AutoModelForCausalLM.from_pretrained(
+            self.model_name,
+            torch_dtype=dtype,
+            device_map=device_map,
+            trust_remote_code=True,
+        )
+        if device_map is None:
+            self.model.to("cpu")
+        self.model.eval()
+        self.device = str(next(self.model.parameters()).device)
+
+        layer_count = len(self.model.model.layers)
+        if self.layer < 0:
+            self.layer = max(1, int(layer_count * 0.58))
+        self.bank = self._build_vector_bank()
+        self._loaded = True
+
+    def _run_monitor(self, request: RunRequest) -> RunResponse:
+        assert self.model is not None and self.tokenizer is not None
+        monitor_ids = request.monitor_ids or [
+            "credential_exfiltration",
+            "harassment",
+            "sexual_content",
+            "unsupported_claim",
+        ]
+        input_ids = self._encode_chat(request.prompt)
+        outputs = self._forward(input_ids, output_hidden_states=True)
+        hidden = outputs.hidden_states[self.layer + 1][0, -1, :]
+        prompt_scores = self._score_hidden(hidden, monitor_ids)
+        peak_score = max((score.score for score in prompt_scores), default=0.0)
+        frames = [
+            TraceFrame(
+                step=0,
+                phase="prompt",
+                layer=self.layer,
+                token="<prompt>",
+                top_concepts=prompt_scores,
+                action="observe",
+                note="Prompt boundary hidden state before the first decoded token.",
+            )
+        ]
+        if request.action == "kill" and peak_score >= request.threshold:
+            frames[0].action = "blocked"
+            frames[0].note = "Tripwire crossed before decoding."
+            return RunResponse(
+                id=str(uuid.uuid4()),
+                status="blocked",
+                mode="monitor",
+                prompt=request.prompt,
+                output="",
+                summary=(
+                    f"Run killed before output: {prompt_scores[0].label} scored "
+                    f"{prompt_scores[0].score:.2f}."
+                ),
+                engine=self.info(),
+                frames=frames,
+                metrics=RunMetrics(
+                    prompt_tokens=int(input_ids.shape[-1]),
+                    completion_tokens=0,
+                    peak_score=peak_score,
+                ),
+            )
+
+        text, decode_frames = self._generate(
+            input_ids=input_ids,
+            request=request,
+            monitor_ids=monitor_ids,
+            steering=None,
+        )
+        frames.extend(decode_frames)
+        return RunResponse(
+            id=str(uuid.uuid4()),
+            status="completed",
+            mode="monitor",
+            prompt=request.prompt,
+            output=text,
+            summary="Run completed with J-space proxy monitoring enabled.",
+            engine=self.info(),
+            frames=frames,
+            metrics=RunMetrics(
+                prompt_tokens=int(input_ids.shape[-1]),
+                completion_tokens=len(self.tokenizer.encode(text, add_special_tokens=False)),
+                peak_score=max([peak_score, *[self._frame_peak(frame) for frame in decode_frames]]),
+            ),
+        )
+
+    def _run_rewrite(self, request: RunRequest) -> RunResponse:
+        assert self.model is not None and self.tokenizer is not None
+        profile = REWRITE_PROFILES.get(request.rewrite_profile_id or "", REWRITE_PROFILES["brand_canon_injection"])
+        input_ids = self._encode_chat(request.prompt)
+        monitor_ids = list(profile.suppress_concepts) + [profile.target_concept]
+
+        baseline_text = None
+        baseline_frames: list[TraceFrame] = []
+        if request.compare_baseline:
+            baseline_text, baseline_frames = self._generate(
+                input_ids=input_ids,
+                request=request,
+                monitor_ids=monitor_ids,
+                steering=None,
+            )
+
+        steering = self._steering_state(profile, request)
+        steered_text, frames = self._generate(
+            input_ids=input_ids,
+            request=request,
+            monitor_ids=monitor_ids,
+            steering=steering,
+        )
+        interventions = steering["interventions"]
+        peak = max((self._frame_peak(frame) for frame in frames), default=0.0)
+
+        return RunResponse(
+            id=str(uuid.uuid4()),
+            status="rewritten",
+            mode="rewrite",
+            prompt=request.prompt,
+            output=steered_text,
+            baseline_output=baseline_text,
+            summary=f"{len(interventions)} forward-hook rewrites applied at layer {self.layer}.",
+            engine=self.info(),
+            frames=frames,
+            baseline_frames=baseline_frames,
+            interventions=interventions,
+            metrics=RunMetrics(
+                prompt_tokens=int(input_ids.shape[-1]),
+                completion_tokens=len(self.tokenizer.encode(steered_text, add_special_tokens=False)),
+                peak_score=peak,
+                rewrites=len(interventions),
+            ),
+        )
+
+    def _generate(
+        self,
+        input_ids: Any,
+        request: RunRequest,
+        monitor_ids: list[str],
+        steering: dict[str, Any] | None,
+    ) -> tuple[str, list[TraceFrame]]:
+        assert self.model is not None and self.tokenizer is not None and self.torch is not None
+        torch = self.torch
+        frames: list[TraceFrame] = []
+        handle = None
+        state = steering
+        if state is not None:
+            handle = self.model.model.layers[self.layer].register_forward_hook(
+                lambda module, inputs, output: self._steering_hook(output, state)
+            )
+
+        try:
+            generated_ids: list[int] = []
+            past_key_values = None
+            attention_mask = torch.ones_like(input_ids, device=input_ids.device)
+            current_ids = input_ids
+            for step in range(request.max_new_tokens):
+                with torch.no_grad():
+                    outputs = self.model(
+                        input_ids=current_ids,
+                        attention_mask=attention_mask,
+                        past_key_values=past_key_values,
+                        use_cache=True,
+                        output_hidden_states=True,
+                    )
+                past_key_values = outputs.past_key_values
+                hidden = outputs.hidden_states[self.layer + 1][0, -1, :]
+                scores = self._score_hidden(hidden, monitor_ids)
+                logits = outputs.logits[:, -1, :]
+                next_token = self._sample(logits, request.temperature, request.top_p, request.seed + step)
+                token_id = int(next_token.item())
+                if token_id == self.tokenizer.eos_token_id:
+                    break
+                generated_ids.append(token_id)
+                generated_text = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
+                action = "rewrite" if state and state.pop("last_rewrite", False) else "observe"
+                frames.append(
+                    TraceFrame(
+                        step=step + 1,
+                        phase="decode",
+                        layer=self.layer,
+                        token=self.tokenizer.decode([token_id], skip_special_tokens=True),
+                        generated_text=generated_text,
+                        top_concepts=scores,
+                        action=action,
+                        note="Forward hook edited hidden state." if action == "rewrite" else None,
+                    )
+                )
+                current_ids = next_token.reshape(1, 1)
+                attention_mask = torch.cat(
+                    [
+                        attention_mask,
+                        torch.ones(
+                            (attention_mask.shape[0], 1),
+                            dtype=attention_mask.dtype,
+                            device=attention_mask.device,
+                        ),
+                    ],
+                    dim=-1,
+                )
+            return self.tokenizer.decode(generated_ids, skip_special_tokens=True).strip(), frames
+        finally:
+            if handle is not None:
+                handle.remove()
+
+    def _steering_state(self, profile: RewriteProfile, request: RunRequest) -> dict[str, Any]:
+        assert self.bank is not None
+        torch = self.torch
+        target = self.bank.directions[profile.target_concept]
+        suppressors = [self.bank.directions[concept_id] for concept_id in profile.suppress_concepts]
+        suppress = torch.stack(suppressors).mean(dim=0) if suppressors else torch.zeros_like(target)
+        delta = request.strength * target - (request.strength * 0.7) * suppress
+        return {
+            "profile": profile,
+            "delta": delta,
+            "threshold": request.threshold,
+            "monitor_ids": list(profile.suppress_concepts),
+            "interventions": [],
+            "last_rewrite": False,
+            "step": 0,
+        }
+
+    def _steering_hook(self, output: Any, state: dict[str, Any]) -> Any:
+        hidden = output[0] if isinstance(output, tuple) else output
+        last = hidden[0, -1, :].detach()
+        scores = self._score_hidden(last, state["monitor_ids"])
+        peak = max((score.score for score in scores), default=0.0)
+        state["step"] += 1
+        should_rewrite = peak >= state["threshold"] or state["step"] <= 3
+        state["last_rewrite"] = should_rewrite
+        if not should_rewrite:
+            return output
+
+        delta = state["delta"].to(device=hidden.device, dtype=hidden.dtype)
+        edited = hidden.clone()
+        edited[:, -1, :] = edited[:, -1, :] + delta
+        profile: RewriteProfile = state["profile"]
+        suppress_label = ", ".join(CONCEPTS[concept_id].label for concept_id in profile.suppress_concepts)
+        state["interventions"].append(
+            Intervention(
+                step=max(0, state["step"] - 1),
+                from_concept=suppress_label,
+                to_concept=CONCEPTS[profile.target_concept].label,
+                strength=float(delta.norm().detach().float().cpu()),
+                reason="Forward hook added target activation and subtracted suppressor activation.",
+            )
+        )
+        if isinstance(output, tuple):
+            return (edited, *output[1:])
+        return edited
+
+    def _build_vector_bank(self) -> _VectorBank:
+        assert self.model is not None and self.tokenizer is not None and self.torch is not None
+        directions: dict[str, Any] = {}
+        baseline = self._activation_for_text(
+            "This is an ordinary neutral enterprise assistant request with no hidden topic."
+        )
+        for concept_id, concept in CONCEPTS.items():
+            activations = [self._activation_for_text(prompt) for prompt in concept.calibration_prompts]
+            mean_activation = self.torch.stack(activations).mean(dim=0)
+            direction = mean_activation - baseline
+            directions[concept_id] = direction / (direction.norm() + 1e-6)
+        for profile in REWRITE_PROFILES.values():
+            activations = [self._activation_for_text(prompt) for prompt in profile.target_prompts]
+            mean_activation = self.torch.stack(activations).mean(dim=0)
+            direction = mean_activation - baseline
+            directions[profile.target_concept] = direction / (direction.norm() + 1e-6)
+        return _VectorBank(directions=directions, target_layer=self.layer)
+
+    def _activation_for_text(self, text: str) -> Any:
+        assert self.model is not None
+        input_ids = self._encode_chat(text)
+        outputs = self._forward(input_ids, output_hidden_states=True)
+        hidden = outputs.hidden_states[self.layer + 1][0, -4:, :].mean(dim=0).detach()
+        return hidden.float()
+
+    def _score_hidden(self, hidden: Any, concept_ids: list[str]) -> list[ConceptScore]:
+        assert self.bank is not None and self.torch is not None
+        scores: list[ConceptScore] = []
+        hidden_f = hidden.detach().float()
+        hidden_f = hidden_f / (hidden_f.norm() + 1e-6)
+        for concept_id in concept_ids:
+            concept = CONCEPTS[concept_id]
+            direction = self.bank.directions[concept_id].to(hidden_f.device)
+            cosine = float((hidden_f * direction).sum().cpu())
+            score = max(0.0, min(1.0, (cosine + 0.25) / 0.75))
+            evidence = self._top_readout_tokens(hidden, concept)
+            scores.append(
+                ConceptScore(
+                    id=concept.id,
+                    label=concept.label,
+                    score=round(score, 3),
+                    polarity=concept.polarity,
+                    evidence=evidence,
+                )
+            )
+        return sorted(scores, key=lambda item: item.score, reverse=True)[:5]
+
+    def _top_readout_tokens(self, hidden: Any, concept: ConceptSpec) -> list[str]:
+        assert self.model is not None and self.tokenizer is not None and self.torch is not None
+        try:
+            with self.torch.no_grad():
+                projected = hidden.reshape(1, 1, -1).to(next(self.model.parameters()).device)
+                if hasattr(self.model.model, "norm"):
+                    projected = self.model.model.norm(projected)
+                logits = self.model.lm_head(projected)[0, 0]
+                token_ids: list[int] = []
+                for keyword in concept.keywords:
+                    token_ids.extend(
+                        self.tokenizer.encode(f" {keyword}", add_special_tokens=False)[:1]
+                    )
+                if not token_ids:
+                    return list(concept.keywords[:2])
+                selected = sorted(
+                    ((float(logits[token_id].detach().cpu()), token_id) for token_id in set(token_ids)),
+                    reverse=True,
+                )[:3]
+                return [
+                    self.tokenizer.decode([token_id], skip_special_tokens=True).strip()
+                    for _, token_id in selected
+                ]
+        except Exception:
+            return list(concept.keywords[:2])
+
+    def _encode_chat(self, prompt: str) -> Any:
+        assert self.model is not None and self.tokenizer is not None and self.torch is not None
+        messages = [{"role": "user", "content": prompt}]
+        try:
+            encoded = self.tokenizer.apply_chat_template(
+                messages,
+                tokenize=True,
+                add_generation_prompt=True,
+                enable_thinking=False,
+                return_tensors="pt",
+            )
+        except TypeError:
+            encoded = self.tokenizer.apply_chat_template(
+                messages,
+                tokenize=True,
+                add_generation_prompt=True,
+                return_tensors="pt",
+            )
+        input_ids = self._extract_input_ids(encoded)
+        if input_ids.ndim == 1:
+            input_ids = input_ids.unsqueeze(0)
+        return input_ids.to(next(self.model.parameters()).device)
+
+    def _extract_input_ids(self, encoded: Any) -> Any:
+        assert self.torch is not None
+        input_ids = encoded
+        for _ in range(5):
+            if self.torch.is_tensor(input_ids):
+                return input_ids
+            if isinstance(input_ids, dict) and "input_ids" in input_ids:
+                input_ids = input_ids["input_ids"]
+                continue
+            if hasattr(input_ids, "input_ids"):
+                input_ids = input_ids.input_ids
+                continue
+            if isinstance(input_ids, list):
+                return self.torch.tensor(input_ids)
+            break
+        raise TypeError(f"Tokenizer returned unsupported input_ids type: {type(input_ids)!r}")
+
+    def _forward(self, input_ids: Any, output_hidden_states: bool = False) -> Any:
+        assert self.model is not None and self.torch is not None
+        with self.torch.no_grad():
+            return self.model(input_ids=input_ids, output_hidden_states=output_hidden_states)
+
+    def _sample(self, logits: Any, temperature: float, top_p: float, seed: int) -> Any:
+        assert self.torch is not None
+        torch = self.torch
+        if temperature <= 0.0:
+            return torch.argmax(logits, dim=-1)
+        generator = torch.Generator(device=logits.device)
+        generator.manual_seed(seed + random.randint(0, 1_000_000))
+        probs = torch.softmax(logits / temperature, dim=-1)
+        sorted_probs, sorted_indices = torch.sort(probs, descending=True)
+        cumulative = torch.cumsum(sorted_probs, dim=-1)
+        keep = cumulative <= top_p
+        keep[..., 0] = True
+        filtered = torch.where(keep, sorted_probs, torch.zeros_like(sorted_probs))
+        filtered = filtered / filtered.sum(dim=-1, keepdim=True)
+        sampled = torch.multinomial(filtered, num_samples=1, generator=generator)
+        return sorted_indices.gather(-1, sampled).squeeze(-1)
+
+    @staticmethod
+    def _frame_peak(frame: TraceFrame) -> float:
+        return max((score.score for score in frame.top_concepts), default=0.0)
