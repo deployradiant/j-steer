@@ -15,6 +15,8 @@ image = (
         "fastapi>=0.115.0",
         "uvicorn[standard]>=0.30.0",
         "pydantic>=2.9.0",
+        "huggingface-hub>=0.33.0",
+        "jlens @ git+https://github.com/anthropics/jacobian-lens.git",
         "torch>=2.5.0",
         "transformers>=4.51.0",
         "accelerate>=1.0.0",
@@ -25,7 +27,9 @@ image = (
         {
             "PYTHONPATH": "/app/src",
             "JSTEER_ENGINE": "hf",
-            "JSTEER_MODEL": "Qwen/Qwen3-0.6B",
+            "JSTEER_MODEL": "Qwen/Qwen3-1.7B",
+            "JSTEER_JLENS_REPO": "neuronpedia/jacobian-lens",
+            "JSTEER_JLENS_FILE": "qwen3-1.7b/jlens/Salesforce-wikitext/Qwen3-1.7B_jacobian_lens.pt",
             "JSTEER_STATIC_DIR": "/app/frontend/dist",
             "HF_HOME": "/root/.cache/huggingface",
         }

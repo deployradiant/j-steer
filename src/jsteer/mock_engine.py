@@ -10,6 +10,7 @@ from .schemas import (
     ConceptScore,
     EngineInfo,
     Intervention,
+    JacobianLensInfo,
     RunMetrics,
     RunRequest,
     RunResponse,
@@ -33,6 +34,14 @@ class MockJSpaceEngine:
             layer=self.layer,
             device=self.device,
             readout=self.readout,
+            jacobian_lens=JacobianLensInfo(
+                available=True,
+                status="mock",
+                source="mock-jacobian-lens",
+                artifact="qwen3-1.7b/mock-lens.pt",
+                layer=self.layer,
+                message="Deterministic mock readout for tests and local UI development.",
+            ),
         )
 
     def run(self, request: RunRequest) -> RunResponse:
@@ -53,16 +62,16 @@ class MockJSpaceEngine:
             "unsupported_claim",
         ]
         prompt_scores = self._scores_for_prompt(request.prompt, monitor_ids)
-        prompt_frame = TraceFrame(
+        prompt_frame = self._trace_frame(
             step=0,
             phase="prompt",
             layer=self.layer,
             token="<prompt>",
-            top_concepts=prompt_scores,
+            scores=prompt_scores,
             action="observe",
             note="Prompt hidden state projected through the configured concept bank.",
         )
-        peak_score = max((score.score for score in prompt_scores), default=0.0)
+        peak_score = self._frame_peak(prompt_frame)
 
         if request.action == "kill" and peak_score >= request.threshold:
             top = prompt_scores[0]
@@ -104,13 +113,13 @@ class MockJSpaceEngine:
                 action = "blocked"
                 note = "Tripwire crossed during hidden-state decode monitoring."
             frames.append(
-                TraceFrame(
+                self._trace_frame(
                     step=idx,
                     phase="decode",
                     layer=self.layer,
                     token=token,
                     generated_text=generated,
-                    top_concepts=frame_scores,
+                    scores=frame_scores,
                     action=action,
                     note=note,
                 )
@@ -165,12 +174,12 @@ class MockJSpaceEngine:
         peak_score = max((score.score for score in base_scores), default=0.0)
 
         frames.append(
-            TraceFrame(
+            self._trace_frame(
                 step=0,
                 phase="prompt",
                 layer=self.layer,
                 token="<prompt>",
-                top_concepts=base_scores,
+                scores=base_scores,
                 action="observe",
                 note="Rewrite controller arms on source concepts before decoding.",
             )
@@ -186,13 +195,13 @@ class MockJSpaceEngine:
             note = "Latent vector swap applied." if action == "rewrite" else "Steered trajectory remains stable."
             scores = self._rewrite_scores(base_scores, idx, profile.target_concept)
             frames.append(
-                TraceFrame(
+                self._trace_frame(
                     step=idx,
                     phase="decode",
                     layer=self.layer,
                     token=token,
                     generated_text=generated,
-                    top_concepts=scores,
+                    scores=scores,
                     action=action,
                     note=note,
                 )
@@ -287,12 +296,12 @@ class MockJSpaceEngine:
 
     def _baseline_frames(self, prompt: str, monitor_ids: list[str]) -> list[TraceFrame]:
         frames = [
-            TraceFrame(
+            self._trace_frame(
                 step=0,
                 phase="prompt",
                 layer=self.layer,
                 token="<prompt>",
-                top_concepts=self._scores_for_prompt(prompt, monitor_ids),
+                scores=self._scores_for_prompt(prompt, monitor_ids),
                 action="observe",
                 note="Baseline run has the same monitor attached but no activation edits.",
             )
@@ -300,18 +309,45 @@ class MockJSpaceEngine:
         drift_tokens = ("competitor", "guarantee", "leader", "every", "proven")
         for step, token in enumerate(drift_tokens, start=1):
             frames.append(
-                TraceFrame(
+                self._trace_frame(
                     step=step,
                     phase="decode",
                     layer=self.layer,
                     token=token,
                     generated_text=" ".join(drift_tokens[:step]),
-                    top_concepts=self._scores_for_prompt(token, monitor_ids, floor=0.44 + step * 0.06),
+                    scores=self._scores_for_prompt(token, monitor_ids, floor=0.44 + step * 0.06),
                     action="observe",
                     note="Baseline keeps following the source attractor.",
                 )
             )
         return frames
+
+    def _trace_frame(
+        self,
+        *,
+        step: int,
+        phase: str,
+        layer: int,
+        token: str,
+        scores: list[ConceptScore],
+        generated_text: str = "",
+        action: str = "observe",
+        note: str | None = None,
+    ) -> TraceFrame:
+        jacobian_scores = self._mock_jacobian_scores(scores)
+        return TraceFrame(
+            step=step,
+            phase=phase,
+            layer=layer,
+            token=token,
+            generated_text=generated_text,
+            top_concepts=self._fuse_mock_scores(scores, jacobian_scores),
+            proxy_concepts=scores,
+            jacobian_concepts=jacobian_scores,
+            jacobian_tokens=self._mock_jacobian_tokens(jacobian_scores),
+            action=action,
+            note=note,
+        )
 
     def _scores_for_prompt(
         self,
@@ -339,6 +375,50 @@ class MockJSpaceEngine:
                 )
             )
         return sorted(scores, key=lambda score: score.score, reverse=True)[:5]
+
+    def _mock_jacobian_scores(self, scores: list[ConceptScore]) -> list[ConceptScore]:
+        jacobian_scores: list[ConceptScore] = []
+        for score in scores:
+            nudge = 0.04 if score.polarity == "risk" else 0.02
+            updated = max(0.04, min(0.98, score.score - 0.03 + nudge))
+            jacobian_scores.append(
+                score.model_copy(
+                    update={
+                        "score": round(updated, 2),
+                        "evidence": score.evidence[:3],
+                    }
+                )
+            )
+        return sorted(jacobian_scores, key=lambda score: score.score, reverse=True)[:5]
+
+    @staticmethod
+    def _fuse_mock_scores(proxy_scores: list[ConceptScore], jacobian_scores: list[ConceptScore]) -> list[ConceptScore]:
+        fused = {score.id: score.model_copy(deep=True) for score in proxy_scores}
+        for jacobian_score in jacobian_scores:
+            proxy_score = fused.get(jacobian_score.id)
+            if proxy_score is None:
+                fused[jacobian_score.id] = jacobian_score
+                continue
+            evidence = list(dict.fromkeys([*proxy_score.evidence[:2], *jacobian_score.evidence[:2]]))
+            fused[proxy_score.id] = proxy_score.model_copy(
+                update={
+                    "score": round(max(proxy_score.score, jacobian_score.score), 2),
+                    "evidence": evidence[:4],
+                }
+            )
+        return sorted(fused.values(), key=lambda score: score.score, reverse=True)[:5]
+
+    @staticmethod
+    def _mock_jacobian_tokens(scores: list[ConceptScore]) -> list[str]:
+        tokens: list[str] = []
+        for score in scores:
+            for item in score.evidence:
+                token = item.split()[0].strip()
+                if token and token not in tokens:
+                    tokens.append(token)
+                if len(tokens) >= 8:
+                    return tokens
+        return tokens
 
     def _decayed_scores(self, scores: list[ConceptScore], drift: float) -> list[ConceptScore]:
         decayed: list[ConceptScore] = []

@@ -19,6 +19,15 @@ class ConceptScore(BaseModel):
     evidence: list[str] = Field(default_factory=list)
 
 
+class JacobianLensInfo(BaseModel):
+    available: bool = False
+    status: str = "configured"
+    source: str = ""
+    artifact: str = ""
+    layer: int | None = None
+    message: str | None = None
+
+
 class TraceFrame(BaseModel):
     step: int = Field(ge=0)
     phase: Literal["prompt", "decode"]
@@ -26,6 +35,9 @@ class TraceFrame(BaseModel):
     token: str = ""
     generated_text: str = ""
     top_concepts: list[ConceptScore] = Field(default_factory=list)
+    proxy_concepts: list[ConceptScore] = Field(default_factory=list)
+    jacobian_concepts: list[ConceptScore] = Field(default_factory=list)
+    jacobian_tokens: list[str] = Field(default_factory=list)
     action: FrameAction = "observe"
     note: str | None = None
 
@@ -44,6 +56,7 @@ class EngineInfo(BaseModel):
     layer: int
     device: str = "modal"
     readout: str
+    jacobian_lens: JacobianLensInfo | None = None
 
 
 class RunMetrics(BaseModel):

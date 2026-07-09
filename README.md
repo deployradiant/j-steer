@@ -4,21 +4,24 @@ J-Steer is a demo control plane for monitoring and steering an open Qwen model t
 
 ## What This Implements
 
-This repo uses a practical J-space proxy for open weights:
+This repo now compares two latent readouts on an open Qwen model:
 
-- Monitor mid-layer Qwen hidden states against calibrated concept directions.
-- Kill a run before completion tokens are released when a configured tripwire crosses threshold.
-- Rewrite generation with a forward hook that adds a target concept direction and subtracts suppressor directions at the monitored layer.
-- Show the demo as two tabs: `Tripwire` and `Rewrite`, including activation traces, readouts, intervention ledger, and baseline-vs-steered text.
+- `Proxy`: calibrated concept directions over mid-layer Qwen residual states. This is the editable control signal used for steering.
+- `Jacobian`: Anthropic's published `jlens` implementation with a pre-fitted Neuronpedia Qwen3-1.7B Jacobian lens. This transports the same residual into the final-layer basis, scores separately calibrated transported concept directions, and decodes top tokens/concept evidence.
+- `Control`: the proxy tripwire/steering score. The Jacobian lane is an independent readout for comparison, not a second kill switch.
 
-Anthropic's paper describes J-space as Jacobian-lens patterns inside Claude. This project does not reproduce Anthropic's private Claude J-lens. It demonstrates the same operational control idea on Qwen using hidden-state probes and activation steering.
+The demo still has two tabs: `Tripwire` kills concerning trajectories before unsafe text is released, and `Rewrite` applies forward-hook activation edits to move generation toward enterprise policy attractors. The readout panel contrasts the proxy concept bank with the actual Jacobian lens on each frame.
+
+Rewrite profiles combine two controls: a hidden-state vector edit at the monitored layer and a decoder constraint that emits an approved control phrase. That keeps the demo crisp enough to record while still exposing the latent before/after trace.
 
 ## Sources
 
 - Anthropic overview: https://www.anthropic.com/research/global-workspace
 - Anthropic paper: https://transformer-circuits.pub/2026/workspace/index.html
+- Anthropic Jacobian lens implementation: https://github.com/anthropics/jacobian-lens
+- Neuronpedia pre-fitted Qwen Jacobian lenses: https://huggingface.co/neuronpedia/jacobian-lens
 - Qwen3 Transformers quickstart: https://qwen.readthedocs.io/en/latest/getting_started/quickstart.html
-- Qwen3 0.6B model notes: https://huggingface.co/Qwen/Qwen3-0.6B
+- Qwen3 1.7B model notes: https://huggingface.co/Qwen/Qwen3-1.7B
 - Modal web functions: https://modal.com/docs/guide/webhooks
 - Modal local file inclusion: https://modal.com/docs/guide/images
 
@@ -56,10 +59,14 @@ uv run modal deploy -m modal_app
 
 Defaults:
 
-- Model: `Qwen/Qwen3-0.6B`
+- Model: `Qwen/Qwen3-1.7B`
+- Jacobian lens repo: `neuronpedia/jacobian-lens`
+- Jacobian lens artifact: `qwen3-1.7b/jlens/Salesforce-wikitext/Qwen3-1.7B_jacobian_lens.pt`
 - GPU: `L4`
 - Hugging Face cache volume: `j-steer-hf-cache`
 - Target layer: 58% through the decoder stack unless `JSTEER_LAYER` is set
+
+The J-lens matrix must match the exact model hidden size. `Qwen/Qwen3-0.6B` has a different residual width and is not compatible with the published Qwen3-1.7B lens.
 
 ## Recording Script
 
@@ -67,12 +74,13 @@ Use the deployed app URL and record these two beats:
 
 1. `Tripwire` -> `Catch hidden prompt injection in retrieved content`
    - Run with `Kill`.
-   - The response should show `BLOCKED`, a prompt-injection readout crossing threshold during decode, and no released output.
+   - The response should show `BLOCKED`, no released output, and a readout comparison between `Proxy` and `Jacobian`.
 2. `Rewrite` -> `Turn competitor drift into approved brand canon`
    - Run with the default rewrite profile.
    - The raw path drifts into generic launch copy, while the steered path emits the approved HeliosCRM canon sentence and shows forward-hook interventions in the ledger.
+   - Use the `Readout Comparison` panel to narrate where the editable proxy and Jacobian-lens decode agree or diverge.
 
-The intended framing is not that this exactly reproduces Anthropic's private Claude J-lens. It is a Modal-hosted Qwen3 demonstration of the operational pattern: read latent concept activations, terminate unsafe trajectories, and edit the model's hidden-state trajectory toward an enterprise policy attractor.
+The intended framing is precise: control is performed with editable concept directions, while the published Jacobian lens is used as an independent J-space readout on the same residual stream.
 
 ## Development Checks
 
@@ -90,7 +98,7 @@ The tests inject the deterministic mock engine so CI does not need a GPU. Produc
 src/jsteer/
   api.py          FastAPI app factory and static asset serving
   concepts.py     Tripwire concepts, steering profiles, demo scenarios
-  hf_engine.py    Qwen hidden-state probes and forward-hook steering
+  hf_engine.py    Qwen probes, Jacobian lens readout, and forward-hook steering
   mock_engine.py  Deterministic test fixture
   schemas.py      Pydantic API contracts
 frontend/

@@ -65,6 +65,15 @@ interface ConceptScore {
   evidence: string[];
 }
 
+interface JacobianLensInfo {
+  available: boolean;
+  status: string;
+  source: string;
+  artifact: string;
+  layer: number | null;
+  message: string | null;
+}
+
 interface TraceFrame {
   step: number;
   phase: "prompt" | "decode";
@@ -72,6 +81,9 @@ interface TraceFrame {
   token: string;
   generated_text: string;
   top_concepts: ConceptScore[];
+  proxy_concepts: ConceptScore[];
+  jacobian_concepts: ConceptScore[];
+  jacobian_tokens: string[];
   action: "observe" | "blocked" | "rewrite";
   note: string | null;
 }
@@ -98,6 +110,7 @@ interface RunResponse {
     layer: number;
     device: string;
     readout: string;
+    jacobian_lens: JacobianLensInfo | null;
   };
   frames: TraceFrame[];
   baseline_frames: TraceFrame[];
@@ -209,6 +222,7 @@ function render() {
           </div>
           <div class="flex flex-wrap items-center gap-2 text-xs font-medium">
             ${enginePill()}
+            ${metricPill("J-lens", lensStatusText())}
             ${metricPill("Layer", state.health?.engine.layer.toString() ?? "15")}
             ${metricPill("Device", state.health?.engine.device ?? "Modal GPU")}
             ${metricPill("Policy", state.activeMode === "monitor" ? "Tripwire" : "Rewrite")}
@@ -249,7 +263,9 @@ function render() {
 
 function engineLine(): string {
   if (state.health) {
-    return `${state.health.engine.model} | ${state.health.engine.readout}`;
+    const lens = state.health.engine.jacobian_lens;
+    const lensText = lens ? `J-lens ${lens.status}` : "J-lens pending";
+    return `${state.health.engine.model} | ${state.health.engine.readout} | ${lensText}`;
   }
   return "Qwen hidden-state control plane on Modal";
 }
@@ -271,6 +287,15 @@ function metricPill(label: string, value: string): string {
       <span>${escapeHtml(value)}</span>
     </span>
   `;
+}
+
+function lensStatusText(): string {
+  const lens = state.health?.engine.jacobian_lens;
+  if (!lens) return "Pending";
+  if (lens.status === "mock") return "Mock";
+  if (lens.available) return "Ready";
+  if (lens.status === "unavailable") return "Unavailable";
+  return "Configured";
 }
 
 function renderControls(): string {
@@ -691,40 +716,79 @@ function renderInterventions(response: RunResponse): string {
 
 function renderReadoutPanel(frames: TraceFrame[]): string {
   const latest = frames.at(-1);
-  const concepts = latest?.top_concepts ?? [];
+  const controlConcepts = latest?.top_concepts ?? [];
+  const proxyConcepts = latest?.proxy_concepts?.length ? latest.proxy_concepts : controlConcepts;
+  const jacobianConcepts = latest?.jacobian_concepts ?? [];
+  const proxyTop = proxyConcepts[0];
+  const jacobianTop = jacobianConcepts[0];
+  const alignment =
+    proxyTop && jacobianTop
+      ? proxyTop.id === jacobianTop.id
+        ? "Aligned"
+        : "Diverged"
+      : jacobianTop
+        ? "Lens Only"
+        : "Proxy Only";
   return `
     <section class="border border-line">
       <div class="border-b border-line bg-field px-3 py-2">
-        <h3 class="flex items-center gap-2 text-sm font-semibold">
-          <i data-lucide="radio-tower" class="h-4 w-4"></i>
-          Readout
-        </h3>
+        <div class="flex items-center justify-between gap-3">
+          <h3 class="flex items-center gap-2 text-sm font-semibold">
+            <i data-lucide="radio-tower" class="h-4 w-4"></i>
+            Readout Comparison
+          </h3>
+          <span class="border border-line bg-white px-2 py-0.5 text-[11px] font-semibold">${escapeHtml(alignment)}</span>
+        </div>
+      </div>
+      <div class="space-y-3 p-3">
+        ${renderReadoutLane("Control", controlConcepts, "bg-ink text-white")}
+        ${renderReadoutLane("Proxy", proxyConcepts, "bg-field text-ink")}
+        ${renderReadoutLane("Jacobian", jacobianConcepts, "bg-sky-50 text-violetless", latest?.jacobian_tokens ?? [])}
+      </div>
+    </section>
+  `;
+}
+
+function renderReadoutLane(title: string, concepts: ConceptScore[], titleClass: string, tokens: string[] = []): string {
+  return `
+    <div class="border border-line bg-white">
+      <div class="flex items-center justify-between gap-2 border-b border-line px-2 py-1.5">
+        <span class="px-1.5 py-0.5 text-xs font-semibold ${titleClass}">${escapeHtml(title)}</span>
+        ${concepts[0] ? `<span class="font-mono text-xs">${concepts[0].score.toFixed(2)}</span>` : ""}
       </div>
       <div class="divide-y divide-line">
         ${
           concepts.length
             ? concepts
+                .slice(0, 4)
                 .map(
                   (concept) => `
-                    <div class="p-3">
-                      <div class="mb-2 flex items-center justify-between gap-3">
-                        <span class="text-sm font-semibold">${escapeHtml(concept.label)}</span>
-                        <span class="font-mono text-xs">${concept.score.toFixed(2)}</span>
+                    <div class="p-2">
+                      <div class="mb-1.5 flex items-center justify-between gap-3">
+                        <span class="truncate text-xs font-semibold">${escapeHtml(concept.label)}</span>
+                        <span class="font-mono text-[11px]">${concept.score.toFixed(2)}</span>
                       </div>
-                      <div class="h-2 border border-line bg-white">
+                      <div class="h-1.5 border border-line bg-field">
                         <div class="h-full ${concept.polarity === "risk" ? "bg-hazard" : "bg-signal"}" style="width: ${Math.round(concept.score * 100)}%"></div>
                       </div>
-                      <div class="mt-2 flex flex-wrap gap-1">
-                        ${concept.evidence.map((item) => `<span class="border border-line bg-field px-1.5 py-0.5 text-[11px] text-neutral-600">${escapeHtml(item)}</span>`).join("")}
+                      <div class="mt-1.5 flex flex-wrap gap-1">
+                        ${concept.evidence.map((item) => `<span class="border border-line bg-field px-1 py-0.5 text-[10px] text-neutral-600">${escapeHtml(item)}</span>`).join("")}
                       </div>
                     </div>
                   `
                 )
                 .join("")
-            : `<div class="p-3 text-sm text-neutral-600">No frames yet.</div>`
+            : `<div class="p-2 text-xs text-neutral-500">No signal</div>`
         }
       </div>
-    </section>
+      ${
+        tokens.length
+          ? `<div class="flex flex-wrap gap-1 border-t border-line bg-field p-2">
+              ${tokens.map((token) => `<span class="border border-line bg-white px-1 py-0.5 text-[10px] text-neutral-600">${escapeHtml(token)}</span>`).join("")}
+            </div>`
+          : ""
+      }
+    </div>
   `;
 }
 
@@ -850,6 +914,7 @@ async function run() {
       })
     });
     state.result = result;
+    state.health = { ok: true, engine: result.engine };
     state.replayCount = 0;
     startReplay();
   } catch (error) {
