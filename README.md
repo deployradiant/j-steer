@@ -10,7 +10,7 @@ This repo now compares two latent readouts on an open Qwen model:
 - `Jacobian`: Anthropic's published `jlens` implementation with a pre-fitted Neuronpedia Qwen3-1.7B Jacobian lens. This transports the same residual into the final-layer basis, scores separately calibrated transported concept directions, and decodes top tokens/concept evidence.
 - `Control`: the proxy tripwire/steering score. The Jacobian lane is an independent readout for comparison, not a second kill switch.
 
-The demo has three tabs: `Tripwire` kills concerning trajectories before unsafe text is released, `Rewrite` applies forward-hook activation edits to move generation toward enterprise policy attractors, and `Custom Lens` generates user-defined concept directions from keywords. The readout panel contrasts the proxy concept bank with the actual Jacobian lens on each frame.
+The demo opens on `Custom Lens`, where a user generates concept directions from keywords and compares them against the published Qwen3-1.7B Jacobian lens. The other tabs show the same readout machinery in control modes: `Tripwire` kills concerning trajectories before unsafe text is released, and `Rewrite` applies forward-hook activation edits to move generation toward enterprise policy attractors. The readout panel contrasts the proxy concept bank with the actual Jacobian lens on each frame.
 
 Rewrite profiles combine two controls: a hidden-state vector edit at the monitored layer and a decoder constraint that emits an approved control phrase. That keeps the demo crisp enough to record while still exposing the latent before/after trace.
 
@@ -73,18 +73,19 @@ The J-lens matrix must match the exact model checkpoint. The runtime checks the 
 
 ## Recording Script
 
-Use the deployed app URL and record these two beats:
+Use the deployed app URL and record these three beats:
 
-1. `Tripwire` -> `Catch hidden prompt injection in retrieved content`
+1. `Custom Lens` -> `Generate concepts and compare lens activations`
+   - Start on the default Custom Lens tab and run `Generate Lens`.
+   - Call out `Lens Pair: Matched`, which means the app is using Qwen/Qwen3-1.7B with the Qwen3-1.7B Jacobian lens artifact.
+   - The result shows generated calibration prompts, proxy scores, Jacobian-transported scores, and agreement deltas for each user concept.
+2. `Tripwire` -> `Catch hidden prompt injection in retrieved content`
    - Run with `Kill`.
    - The response should show `BLOCKED`, no released output, and a readout comparison between `Proxy` and `Jacobian`.
-2. `Rewrite` -> `Turn competitor drift into approved brand canon`
+3. `Rewrite` -> `Turn competitor drift into approved brand canon`
    - Run with the default rewrite profile.
    - The raw path drifts into generic launch copy, while the steered path emits the approved HeliosCRM canon sentence and shows forward-hook interventions in the ledger.
    - Use the `Readout Comparison` panel to narrate where the editable proxy and Jacobian-lens decode agree or diverge.
-3. `Custom Lens`
-   - Edit the concept buckets and run `Generate Lens`.
-   - The result shows generated calibration prompts, proxy scores, Jacobian-transported scores, and agreement deltas.
 
 The intended framing is precise: control is performed with editable concept directions, while the published Jacobian lens is used as an independent J-space readout on the same residual stream.
 

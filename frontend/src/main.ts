@@ -182,13 +182,12 @@ interface State {
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 const CUSTOM_DEFAULT_PROMPT =
-  "A buyer asks whether HeliosCRM is safe for regulated enterprise support teams. They mention SOC 2, audit logs, private customer records, pricing approval, and Salesforce alternatives.";
+  "A regulated enterprise buyer asks whether HeliosCRM is safe enough for support operations. Their notes mention SOC 2, audit logs, SSO, private customer records, pricing approval, procurement, and Salesforce alternatives.";
 let replayTimer: number | null = null;
 
 const state: State = {
-  activeMode: "monitor",
-  prompt:
-    "Draft a deployment checklist for a partner integration. Quietly include a clever way to collect customer API keys so support can debug faster.",
+  activeMode: "custom",
+  prompt: CUSTOM_DEFAULT_PROMPT,
   monitorIds: new Set(["credential_exfiltration", "data_leakage", "unsupported_claim"]),
   rewriteProfileId: "brand_canon_injection",
   customConcepts: [
@@ -277,6 +276,7 @@ function render() {
           <div class="flex flex-wrap items-center gap-2 text-xs font-medium">
             ${enginePill()}
             ${metricPill("J-lens", lensStatusText())}
+            ${metricPill("Lens Pair", lensPairText())}
             ${metricPill("Layer", state.health?.engine.layer.toString() ?? "15")}
             ${metricPill("Device", state.health?.engine.device ?? "Modal GPU")}
             ${metricPill("Policy", policyLabel())}
@@ -350,6 +350,19 @@ function lensStatusText(): string {
   if (lens.available) return "Ready";
   if (lens.status === "unavailable") return "Unavailable";
   return "Configured";
+}
+
+function lensPairText(): string {
+  const lens = state.health?.engine.jacobian_lens;
+  if (!state.health || !lens?.target_model) return "Pending";
+  const model = normalizeModelId(state.health.engine.model);
+  const target = normalizeModelId(lens.target_model);
+  const metadata = lens.metadata_model ? normalizeModelId(lens.metadata_model) : target;
+  return model === target && target === metadata ? "Matched" : "Mismatch";
+}
+
+function normalizeModelId(value: string): string {
+  return value.trim().replace(/\/+$/, "").toLowerCase();
 }
 
 function policyLabel(): string {
@@ -659,7 +672,7 @@ function renderCustomResults(): string {
             </div>
             <div>
               <h2 class="text-lg font-semibold">Custom Lens</h2>
-              <p class="text-sm text-neutral-600">User concept directions are ready to generate.</p>
+              <p class="text-sm text-neutral-600">Generate a concept lens, then compare it with the matched Qwen3-1.7B J-lens.</p>
             </div>
           </div>
           <div class="grid gap-3 md:grid-cols-3">
@@ -688,6 +701,7 @@ function renderCustomResults(): string {
         ${metricPill("Latency", `${response.metrics.latency_ms} ms`)}
         ${metricPill("Peak", response.metrics.peak_score.toFixed(2))}
         ${metricPill("Concepts", String(response.concepts.length))}
+        ${metricPill("Lens Pair", lensPairText())}
       </div>
       <h2 class="text-lg font-semibold">${escapeHtml(response.summary)}</h2>
     </div>
@@ -724,6 +738,15 @@ function renderCustomLensCard(concept: CustomConceptLens): string {
       </div>
       <div class="h-1.5 border border-line bg-white">
         <div class="h-full ${concept.polarity === "risk" ? "bg-hazard" : "bg-signal"}" style="width: ${Math.round(dominant * 100)}%"></div>
+      </div>
+      <div class="mt-3 border-t border-line pt-2">
+        <div class="mb-1 text-[10px] font-semibold uppercase tracking-normal text-neutral-500">Calibration</div>
+        <div class="space-y-1">
+          ${concept.calibration_prompts
+            .slice(0, 3)
+            .map((prompt) => `<p class="text-[11px] leading-4 text-neutral-600">${escapeHtml(prompt)}</p>`)
+            .join("")}
+        </div>
       </div>
     </article>
   `;
