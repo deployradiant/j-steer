@@ -97,6 +97,39 @@ class RunResponse(BaseModel):
     metrics: RunMetrics = Field(default_factory=RunMetrics)
 
 
+class CustomConceptInput(BaseModel):
+    label: str = Field(min_length=2, max_length=80)
+    keywords: list[str] = Field(min_length=1, max_length=12)
+    polarity: ConceptPolarity = "neutral"
+
+
+class CustomConceptLens(BaseModel):
+    id: str
+    label: str
+    polarity: ConceptPolarity
+    keywords: list[str]
+    calibration_prompts: list[str]
+    proxy_score: float = Field(ge=0.0, le=1.0)
+    jacobian_score: float = Field(ge=0.0, le=1.0)
+    agreement_delta: float = Field(ge=0.0, le=1.0)
+
+
+class CustomLensRequest(BaseModel):
+    prompt: str = Field(min_length=1, max_length=8000)
+    concepts: list[CustomConceptInput] = Field(min_length=1, max_length=6)
+    window_tokens: int = Field(default=64, ge=8, le=128)
+
+
+class CustomLensResponse(BaseModel):
+    id: str
+    prompt: str
+    summary: str
+    engine: EngineInfo
+    frame: TraceFrame
+    concepts: list[CustomConceptLens] = Field(default_factory=list)
+    metrics: RunMetrics = Field(default_factory=RunMetrics)
+
+
 class ConceptPublic(BaseModel):
     id: str
     label: str

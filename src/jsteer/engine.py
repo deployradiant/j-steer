@@ -4,13 +4,15 @@ import os
 from typing import Protocol
 
 from .mock_engine import MockJSpaceEngine
-from .schemas import EngineInfo, RunRequest, RunResponse
+from .schemas import CustomLensRequest, CustomLensResponse, EngineInfo, RunRequest, RunResponse
 
 
 class JSpaceEngine(Protocol):
     def info(self) -> EngineInfo: ...
 
     def run(self, request: RunRequest) -> RunResponse: ...
+
+    def custom_lens(self, request: CustomLensRequest) -> CustomLensResponse: ...
 
 
 def create_engine(mode: str | None = None) -> JSpaceEngine:

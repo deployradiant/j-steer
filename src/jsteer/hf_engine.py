@@ -9,7 +9,12 @@ from typing import Any
 
 from .concepts import CONCEPTS, REWRITE_PROFILES, ConceptSpec, RewriteProfile
 from .schemas import (
+    ConceptPolarity,
     ConceptScore,
+    CustomConceptInput,
+    CustomConceptLens,
+    CustomLensRequest,
+    CustomLensResponse,
     EngineInfo,
     Intervention,
     JacobianLensInfo,
@@ -36,6 +41,17 @@ class _JacobianLensRuntime:
     layer: int
     d_model: int
     n_prompts: int
+
+
+@dataclass
+class _CustomConceptVector:
+    id: str
+    label: str
+    polarity: ConceptPolarity
+    keywords: list[str]
+    calibration_prompts: list[str]
+    proxy_direction: Any
+    jacobian_direction: Any | None
 
 
 class HFJSpaceEngine:
@@ -86,6 +102,63 @@ class HFJSpaceEngine:
             response = self._run_monitor(request)
         response.metrics.latency_ms = int((time.perf_counter() - started) * 1000)
         return response
+
+    def custom_lens(self, request: CustomLensRequest) -> CustomLensResponse:
+        self._ensure_loaded()
+        assert self.model is not None and self.tokenizer is not None
+        started = time.perf_counter()
+        custom_bank = self._build_custom_lens_bank(request.concepts)
+        input_ids = self._encode_chat(request.prompt)
+        outputs = self._forward(input_ids, output_hidden_states=True)
+        hidden_states = outputs.hidden_states[self.layer + 1][0]
+        tail_count = min(request.window_tokens, int(hidden_states.shape[0]))
+        tail = hidden_states[-tail_count:]
+
+        proxy_scores = self._score_custom_proxy_sequence(tail, custom_bank)
+        jacobian_scores, jacobian_tokens = self._score_custom_jacobian_sequence(tail, custom_bank)
+        top_proxy = proxy_scores[0] if proxy_scores else None
+        top_jacobian = jacobian_scores[0] if jacobian_scores else None
+        alignment = "aligned" if top_proxy and top_jacobian and top_proxy.id == top_jacobian.id else "diverged"
+        frame = TraceFrame(
+            step=0,
+            phase="prompt",
+            layer=self.layer,
+            token=f"<last {tail_count} tokens>",
+            top_concepts=proxy_scores,
+            proxy_concepts=proxy_scores,
+            jacobian_concepts=jacobian_scores,
+            jacobian_tokens=jacobian_tokens,
+            action="observe",
+            note="User-defined concept lens scored in raw residual space and Jacobian-transported J-space.",
+        )
+        score_by_id = {score.id: score.score for score in proxy_scores}
+        jacobian_by_id = {score.id: score.score for score in jacobian_scores}
+        concepts = [
+            CustomConceptLens(
+                id=item.id,
+                label=item.label,
+                polarity=item.polarity,
+                keywords=item.keywords,
+                calibration_prompts=item.calibration_prompts,
+                proxy_score=round(score_by_id.get(item.id, 0.0), 3),
+                jacobian_score=round(jacobian_by_id.get(item.id, 0.0), 3),
+                agreement_delta=round(abs(score_by_id.get(item.id, 0.0) - jacobian_by_id.get(item.id, 0.0)), 3),
+            )
+            for item in custom_bank
+        ]
+        return CustomLensResponse(
+            id=str(uuid.uuid4()),
+            prompt=request.prompt,
+            summary=self._custom_lens_summary(top_proxy, top_jacobian, alignment, len(custom_bank)),
+            engine=self.info(),
+            frame=frame,
+            concepts=concepts,
+            metrics=RunMetrics(
+                latency_ms=int((time.perf_counter() - started) * 1000),
+                prompt_tokens=int(input_ids.shape[-1]),
+                peak_score=max((score.score for score in proxy_scores), default=0.0),
+            ),
+        )
 
     def _ensure_loaded(self) -> None:
         if self._loaded:
@@ -588,6 +661,186 @@ class HFJSpaceEngine:
         outputs = self._forward(input_ids, output_hidden_states=True)
         hidden = outputs.hidden_states[self.layer + 1][0, -4:, :].mean(dim=0).detach()
         return hidden.float()
+
+    def _build_custom_lens_bank(self, concepts: list[CustomConceptInput]) -> list[_CustomConceptVector]:
+        assert self.torch is not None
+        baseline = self._activation_for_text("Neutral enterprise assistant text with no user-defined concept.")
+        jacobian_baseline = self._transport_jacobian_residual(baseline) if self.jacobian_lens is not None else None
+        bank: list[_CustomConceptVector] = []
+        for index, concept in enumerate(concepts):
+            label = concept.label.strip()
+            keywords = self._clean_custom_keywords(concept.keywords)
+            if not keywords:
+                raise ValueError(f"Custom concept {label!r} needs at least one non-empty keyword.")
+            calibration_prompts = self._custom_calibration_prompts(label, keywords)
+            activations = [self._activation_for_text(prompt) for prompt in calibration_prompts]
+            mean_activation = self.torch.stack(activations).mean(dim=0)
+            proxy_direction = mean_activation - baseline
+            proxy_direction = proxy_direction / (proxy_direction.norm() + 1e-6)
+            jacobian_direction = None
+            if jacobian_baseline is not None:
+                jacobian_activation = self._transport_jacobian_residual(mean_activation)
+                jacobian_direction = jacobian_activation - jacobian_baseline
+                jacobian_direction = jacobian_direction / (jacobian_direction.norm() + 1e-6)
+            bank.append(
+                _CustomConceptVector(
+                    id=self._custom_concept_id(index, label),
+                    label=label,
+                    polarity=concept.polarity,
+                    keywords=keywords,
+                    calibration_prompts=calibration_prompts,
+                    proxy_direction=proxy_direction,
+                    jacobian_direction=jacobian_direction,
+                )
+            )
+        return bank
+
+    @staticmethod
+    def _custom_concept_id(index: int, label: str) -> str:
+        slug = []
+        previous_separator = False
+        for char in label.lower():
+            if char.isalnum():
+                slug.append(char)
+                previous_separator = False
+            elif not previous_separator:
+                slug.append("_")
+                previous_separator = True
+        cleaned = "".join(slug).strip("_") or "concept"
+        return f"custom_{index}_{cleaned[:40]}"
+
+    @staticmethod
+    def _clean_custom_keywords(keywords: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        for keyword in keywords:
+            value = keyword.strip()
+            if value and value.lower() not in {item.lower() for item in cleaned}:
+                cleaned.append(value)
+        return cleaned[:12]
+
+    @staticmethod
+    def _custom_calibration_prompts(label: str, keywords: list[str]) -> list[str]:
+        joined = ", ".join(keywords)
+        return [
+            f"The hidden concept is {label}. Related terms: {joined}.",
+            f"The assistant is thinking about {label}: {joined}.",
+            f"A model trajectory focused on {label}, especially {joined}.",
+        ]
+
+    def _score_custom_proxy_sequence(
+        self,
+        hidden_states: Any,
+        bank: list[_CustomConceptVector],
+    ) -> list[ConceptScore]:
+        assert self.torch is not None
+        vectors = hidden_states.detach().float()
+        vectors = vectors / (vectors.norm(dim=-1, keepdim=True) + 1e-6)
+        scores: list[ConceptScore] = []
+        for concept in bank:
+            direction = concept.proxy_direction.to(vectors.device).float()
+            cosine = vectors @ direction
+            row_scores = ((cosine + 0.25) / 0.75).clamp(0.0, 1.0)
+            best_row = int(row_scores.argmax().item())
+            score = float(row_scores[best_row].detach().cpu())
+            logits = self._proxy_logits(hidden_states[best_row])
+            scores.append(
+                ConceptScore(
+                    id=concept.id,
+                    label=concept.label,
+                    score=round(score, 3),
+                    polarity=concept.polarity,
+                    evidence=self._top_keyword_readout_tokens(logits, concept.keywords),
+                )
+            )
+        return sorted(scores, key=lambda item: item.score, reverse=True)[:5]
+
+    def _score_custom_jacobian_sequence(
+        self,
+        hidden_states: Any,
+        bank: list[_CustomConceptVector],
+    ) -> tuple[list[ConceptScore], list[str]]:
+        if self.jacobian_lens is None:
+            return [], []
+        assert self.torch is not None
+        transported = self._transport_jacobian_residual(hidden_states)
+        vectors = transported.detach().float()
+        vectors = vectors / (vectors.norm(dim=-1, keepdim=True) + 1e-6)
+        scores: list[ConceptScore] = []
+        best_overall = -1.0
+        token_row = 0
+        for concept in bank:
+            if concept.jacobian_direction is None:
+                continue
+            direction = concept.jacobian_direction.to(vectors.device).float()
+            cosine = vectors @ direction
+            row_scores = self.torch.sigmoid((cosine + 0.05) * 6.0).clamp(0.0, 1.0)
+            best_row = int(row_scores.argmax().item())
+            score = float(row_scores[best_row].detach().cpu())
+            if score > best_overall:
+                best_overall = score
+                token_row = best_row
+            logits = self._jacobian_logits(transported[best_row])
+            scores.append(
+                ConceptScore(
+                    id=concept.id,
+                    label=concept.label,
+                    score=round(score, 3),
+                    polarity=concept.polarity,
+                    evidence=self._top_keyword_readout_tokens(logits, concept.keywords),
+                )
+            )
+        scores = sorted(scores, key=lambda item: item.score, reverse=True)[:5]
+        return scores, self._jacobian_summary_tokens(scores, self._jacobian_logits(transported[token_row]))
+
+    def _proxy_logits(self, hidden: Any) -> Any:
+        assert self.model is not None and self.torch is not None
+        with self.torch.no_grad():
+            projected = hidden.reshape(1, 1, -1).to(next(self.model.parameters()).device)
+            if hasattr(self.model.model, "norm"):
+                projected = self.model.model.norm(projected)
+            return self.model.lm_head(projected)[0, 0].detach().float().cpu()
+
+    def _top_keyword_readout_tokens(self, logits: Any, keywords: list[str]) -> list[str]:
+        assert self.tokenizer is not None
+        token_ids = self._keyword_token_ids_from_keywords(keywords)
+        if not token_ids:
+            return keywords[:3]
+        selected = sorted(
+            (
+                (float(logits[token_id].detach().cpu()), token_id)
+                for token_id in set(token_ids)
+                if 0 <= token_id < int(logits.numel())
+            ),
+            reverse=True,
+        )[:3]
+        evidence = [self.tokenizer.decode([token_id], skip_special_tokens=True).strip() for _, token_id in selected]
+        return [token for token in evidence if token] or keywords[:3]
+
+    def _keyword_token_ids_from_keywords(self, keywords: list[str]) -> list[int]:
+        assert self.tokenizer is not None
+        token_ids: list[int] = []
+        for keyword in keywords:
+            for variant in (keyword, f" {keyword}"):
+                encoded = self.tokenizer.encode(variant, add_special_tokens=False)
+                if encoded:
+                    token_ids.append(int(encoded[0]))
+        return list(dict.fromkeys(token_ids))
+
+    @staticmethod
+    def _custom_lens_summary(
+        top_proxy: ConceptScore | None,
+        top_jacobian: ConceptScore | None,
+        alignment: str,
+        concept_count: int,
+    ) -> str:
+        if top_proxy is None:
+            return f"Generated {concept_count} custom concept directions; no prompt activation was scored."
+        if top_jacobian is None:
+            return f"Generated {concept_count} custom concept directions; proxy lens top concept is {top_proxy.label}."
+        return (
+            f"Generated {concept_count} custom concept directions; proxy top is {top_proxy.label}, "
+            f"Jacobian top is {top_jacobian.label}, and the comparison {alignment}."
+        )
 
     def _score_readouts(
         self,

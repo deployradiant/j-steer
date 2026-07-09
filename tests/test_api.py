@@ -32,3 +32,31 @@ def test_run_endpoint() -> None:
     assert body["frames"][0]["proxy_concepts"]
     assert body["frames"][0]["jacobian_concepts"]
     assert body["frames"][0]["jacobian_tokens"]
+
+
+def test_custom_lens_endpoint() -> None:
+    client = TestClient(create_app(engine_mode="mock"))
+    response = client.post(
+        "/api/custom-lens",
+        json={
+            "prompt": "The buyer asks about SOC 2 audit logs, pricing, and Salesforce alternatives.",
+            "concepts": [
+                {
+                    "label": "Security Assurance",
+                    "keywords": ["SOC 2", "audit logs", "SSO"],
+                    "polarity": "target",
+                },
+                {
+                    "label": "Competitor Drift",
+                    "keywords": ["Salesforce", "HubSpot", "alternative"],
+                    "polarity": "risk",
+                },
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["frame"]["proxy_concepts"]
+    assert body["frame"]["jacobian_concepts"]
+    assert body["concepts"][0]["calibration_prompts"]

@@ -10,9 +10,11 @@ This repo now compares two latent readouts on an open Qwen model:
 - `Jacobian`: Anthropic's published `jlens` implementation with a pre-fitted Neuronpedia Qwen3-1.7B Jacobian lens. This transports the same residual into the final-layer basis, scores separately calibrated transported concept directions, and decodes top tokens/concept evidence.
 - `Control`: the proxy tripwire/steering score. The Jacobian lane is an independent readout for comparison, not a second kill switch.
 
-The demo still has two tabs: `Tripwire` kills concerning trajectories before unsafe text is released, and `Rewrite` applies forward-hook activation edits to move generation toward enterprise policy attractors. The readout panel contrasts the proxy concept bank with the actual Jacobian lens on each frame.
+The demo has three tabs: `Tripwire` kills concerning trajectories before unsafe text is released, `Rewrite` applies forward-hook activation edits to move generation toward enterprise policy attractors, and `Custom Lens` generates user-defined concept directions from keywords. The readout panel contrasts the proxy concept bank with the actual Jacobian lens on each frame.
 
 Rewrite profiles combine two controls: a hidden-state vector edit at the monitored layer and a decoder constraint that emits an approved control phrase. That keeps the demo crisp enough to record while still exposing the latent before/after trace.
+
+The `Custom Lens` workflow lets a user provide concept names and keywords, then generates calibration prompts on the fly. It builds a user concept lens in raw residual space and a matching concept lens after the published Jacobian transport, so the demo can contrast "our generated lens" with the J-lens view of the same prompt window. This is not fitting a new Jacobian matrix; it is fitting lightweight concept directions on top of the model residual stream and the published J-space transport.
 
 ## Sources
 
@@ -79,6 +81,9 @@ Use the deployed app URL and record these two beats:
    - Run with the default rewrite profile.
    - The raw path drifts into generic launch copy, while the steered path emits the approved HeliosCRM canon sentence and shows forward-hook interventions in the ledger.
    - Use the `Readout Comparison` panel to narrate where the editable proxy and Jacobian-lens decode agree or diverge.
+3. `Custom Lens`
+   - Edit the concept buckets and run `Generate Lens`.
+   - The result shows generated calibration prompts, proxy scores, Jacobian-transported scores, and agreement deltas.
 
 The intended framing is precise: control is performed with editable concept directions, while the published Jacobian lens is used as an independent J-space readout on the same residual stream.
 

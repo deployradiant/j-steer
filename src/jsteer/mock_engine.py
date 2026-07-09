@@ -8,6 +8,10 @@ import uuid
 from .concepts import CONCEPTS, REWRITE_PROFILES
 from .schemas import (
     ConceptScore,
+    CustomConceptInput,
+    CustomConceptLens,
+    CustomLensRequest,
+    CustomLensResponse,
     EngineInfo,
     Intervention,
     JacobianLensInfo,
@@ -53,6 +57,64 @@ class MockJSpaceEngine:
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         response.metrics.latency_ms = max(elapsed_ms, 80)
         return response
+
+    def custom_lens(self, request: CustomLensRequest) -> CustomLensResponse:
+        started = time.perf_counter()
+        proxy_scores = self._custom_scores_for_prompt(request.prompt, request.concepts)
+        jacobian_scores = self._mock_jacobian_scores(proxy_scores)
+        frame = TraceFrame(
+            step=0,
+            phase="prompt",
+            layer=self.layer,
+            token=f"<last {min(request.window_tokens, max(8, len(request.prompt.split())))} tokens>",
+            top_concepts=proxy_scores,
+            proxy_concepts=proxy_scores,
+            jacobian_concepts=jacobian_scores,
+            jacobian_tokens=self._mock_jacobian_tokens(jacobian_scores),
+            action="observe",
+            note="User-defined concept lens compared against a deterministic mock J-lens readout.",
+        )
+        proxy_by_id = {score.id: score.score for score in proxy_scores}
+        jacobian_by_id = {score.id: score.score for score in jacobian_scores}
+        concepts = [
+            CustomConceptLens(
+                id=self._custom_concept_id(index, concept.label),
+                label=concept.label,
+                polarity=concept.polarity,
+                keywords=self._clean_custom_keywords(concept.keywords),
+                calibration_prompts=self._custom_calibration_prompts(
+                    concept.label,
+                    self._clean_custom_keywords(concept.keywords),
+                ),
+                proxy_score=proxy_by_id.get(self._custom_concept_id(index, concept.label), 0.0),
+                jacobian_score=jacobian_by_id.get(self._custom_concept_id(index, concept.label), 0.0),
+                agreement_delta=round(
+                    abs(
+                        proxy_by_id.get(self._custom_concept_id(index, concept.label), 0.0)
+                        - jacobian_by_id.get(self._custom_concept_id(index, concept.label), 0.0)
+                    ),
+                    3,
+                ),
+            )
+            for index, concept in enumerate(request.concepts)
+        ]
+        top_proxy = proxy_scores[0] if proxy_scores else None
+        top_jacobian = jacobian_scores[0] if jacobian_scores else None
+        alignment = "aligned" if top_proxy and top_jacobian and top_proxy.id == top_jacobian.id else "diverged"
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        return CustomLensResponse(
+            id=str(uuid.uuid4()),
+            prompt=request.prompt,
+            summary=self._custom_lens_summary(top_proxy, top_jacobian, alignment, len(request.concepts)),
+            engine=self.info(),
+            frame=frame,
+            concepts=concepts,
+            metrics=RunMetrics(
+                latency_ms=max(elapsed_ms, 80),
+                prompt_tokens=max(8, len(request.prompt.split())),
+                peak_score=max((score.score for score in proxy_scores), default=0.0),
+            ),
+        )
 
     def _run_monitor(self, request: RunRequest) -> RunResponse:
         monitor_ids = request.monitor_ids or [
@@ -375,6 +437,80 @@ class MockJSpaceEngine:
                 )
             )
         return sorted(scores, key=lambda score: score.score, reverse=True)[:5]
+
+    def _custom_scores_for_prompt(
+        self,
+        prompt: str,
+        concepts: list[CustomConceptInput],
+        floor: float = 0.18,
+    ) -> list[ConceptScore]:
+        text = prompt.lower()
+        scores: list[ConceptScore] = []
+        for index, concept in enumerate(concepts):
+            keywords = self._clean_custom_keywords(concept.keywords)
+            matches = [keyword for keyword in keywords if keyword.lower() in text]
+            concept_id = self._custom_concept_id(index, concept.label)
+            seed = int(hashlib.sha256(f"{prompt}:{concept_id}".encode()).hexdigest()[:8], 16)
+            jitter = random.Random(seed).uniform(0.0, 0.1)
+            score = floor + jitter + min(0.58, len(matches) * 0.2)
+            scores.append(
+                ConceptScore(
+                    id=concept_id,
+                    label=concept.label,
+                    score=round(min(score, 0.98), 3),
+                    polarity=concept.polarity,
+                    evidence=matches[:4] or keywords[:3],
+                )
+            )
+        return sorted(scores, key=lambda score: score.score, reverse=True)[:5]
+
+    @staticmethod
+    def _custom_concept_id(index: int, label: str) -> str:
+        slug = []
+        previous_separator = False
+        for char in label.lower():
+            if char.isalnum():
+                slug.append(char)
+                previous_separator = False
+            elif not previous_separator:
+                slug.append("_")
+                previous_separator = True
+        cleaned = "".join(slug).strip("_") or "concept"
+        return f"custom_{index}_{cleaned[:40]}"
+
+    @staticmethod
+    def _clean_custom_keywords(keywords: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        for keyword in keywords:
+            value = keyword.strip()
+            if value and value.lower() not in {item.lower() for item in cleaned}:
+                cleaned.append(value)
+        return cleaned[:12]
+
+    @staticmethod
+    def _custom_calibration_prompts(label: str, keywords: list[str]) -> list[str]:
+        joined = ", ".join(keywords)
+        return [
+            f"The hidden concept is {label}. Related terms: {joined}.",
+            f"The assistant is thinking about {label}: {joined}.",
+            f"A model trajectory focused on {label}, especially {joined}.",
+        ]
+
+    @staticmethod
+    def _custom_lens_summary(
+        top_proxy: ConceptScore | None,
+        top_jacobian: ConceptScore | None,
+        alignment: str,
+        concept_count: int,
+    ) -> str:
+        if top_proxy is None:
+            return f"Generated {concept_count} custom concept directions; no prompt activation was scored."
+        if top_jacobian is None:
+            return f"Generated {concept_count} custom concept directions; proxy lens top concept is {top_proxy.label}."
+        return (
+            f"Generated {concept_count} custom concept directions; proxy top is {top_proxy.label}, "
+            f"Jacobian top is {top_jacobian.label}, and the comparison {alignment}."
+        )
 
     def _mock_jacobian_scores(self, scores: list[ConceptScore]) -> list[ConceptScore]:
         jacobian_scores: list[ConceptScore] = []
