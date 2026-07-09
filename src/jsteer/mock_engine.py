@@ -43,6 +43,8 @@ class MockJSpaceEngine:
                 status="mock",
                 source="mock-jacobian-lens",
                 artifact="qwen3-1.7b/mock-lens.pt",
+                target_model="mock-qwen3-jspace-proxy",
+                metadata_model="mock-qwen3-jspace-proxy",
                 layer=self.layer,
                 message="Deterministic mock readout for tests and local UI development.",
             ),

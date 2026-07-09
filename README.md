@@ -64,11 +64,12 @@ Defaults:
 - Model: `Qwen/Qwen3-1.7B`
 - Jacobian lens repo: `neuronpedia/jacobian-lens`
 - Jacobian lens artifact: `qwen3-1.7b/jlens/Salesforce-wikitext/Qwen3-1.7B_jacobian_lens.pt`
+- Jacobian lens target model: `Qwen/Qwen3-1.7B`
 - GPU: `L4`
 - Hugging Face cache volume: `j-steer-hf-cache`
 - Target layer: 58% through the decoder stack unless `JSTEER_LAYER` is set
 
-The J-lens matrix must match the exact model hidden size. `Qwen/Qwen3-0.6B` has a different residual width and is not compatible with the published Qwen3-1.7B lens.
+The J-lens matrix must match the exact model checkpoint. The runtime checks the configured target model (`JSTEER_JLENS_MODEL`), the lens artifact metadata (`hf_model_name` in `config.yaml` when present), and the lens hidden size before using the artifact. `Qwen/Qwen3-0.6B` has a different residual width and is not compatible with the published Qwen3-1.7B lens.
 
 ## Recording Script
 

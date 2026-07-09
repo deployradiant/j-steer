@@ -71,6 +71,8 @@ interface JacobianLensInfo {
   status: string;
   source: string;
   artifact: string;
+  target_model: string;
+  metadata_model: string | null;
   layer: number | null;
   message: string | null;
 }

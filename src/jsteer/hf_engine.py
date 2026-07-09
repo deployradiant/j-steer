@@ -38,6 +38,8 @@ class _JacobianLensRuntime:
     matrix: Any
     source: str
     artifact: str
+    target_model: str
+    metadata_model: str | None
     layer: int
     d_model: int
     n_prompts: int
@@ -72,6 +74,7 @@ class HFJSpaceEngine:
             "JSTEER_JLENS_FILE",
             "qwen3-1.7b/jlens/Salesforce-wikitext/Qwen3-1.7B_jacobian_lens.pt",
         )
+        self.lens_target_model = os.getenv("JSTEER_JLENS_MODEL", "Qwen/Qwen3-1.7B")
         self._loaded = False
         self.model: Any | None = None
         self.tokenizer: Any | None = None
@@ -203,6 +206,8 @@ class HFJSpaceEngine:
                 status="ready",
                 source=self.jacobian_lens.source,
                 artifact=self.jacobian_lens.artifact,
+                target_model=self.jacobian_lens.target_model,
+                metadata_model=self.jacobian_lens.metadata_model,
                 layer=self.jacobian_lens.layer,
                 message=(
                     f"Loaded d_model={self.jacobian_lens.d_model} lens from "
@@ -215,6 +220,8 @@ class HFJSpaceEngine:
                 status="unavailable",
                 source=self.lens_source,
                 artifact=self.lens_artifact,
+                target_model=self.lens_target_model,
+                metadata_model=None,
                 layer=max(self.layer, 0),
                 message=self.jacobian_lens_error,
             )
@@ -223,6 +230,8 @@ class HFJSpaceEngine:
             status="configured",
             source=self.lens_source,
             artifact=self.lens_artifact,
+            target_model=self.lens_target_model,
+            metadata_model=None,
             layer=max(self.layer, 0),
             message="Lens will load with the first model-backed run.",
         )
@@ -236,6 +245,19 @@ class HFJSpaceEngine:
             return
 
         try:
+            if not self._model_ids_match(self.model_name, self.lens_target_model):
+                self.jacobian_lens_error = (
+                    f"Configured lens target {self.lens_target_model} does not match loaded model "
+                    f"{self.model_name}. Set JSTEER_MODEL and JSTEER_JLENS_MODEL to the same checkpoint."
+                )
+                return
+            metadata_model = self._lens_metadata_model()
+            if metadata_model and not self._model_ids_match(metadata_model, self.lens_target_model):
+                self.jacobian_lens_error = (
+                    f"Lens metadata names {metadata_model}, but JSTEER_JLENS_MODEL is "
+                    f"{self.lens_target_model}. Use the lens artifact fitted for the loaded Qwen checkpoint."
+                )
+                return
             lens = jlens.JacobianLens.from_pretrained(self.lens_source, filename=self.lens_artifact)
             text_config = self.model.config.get_text_config()
             hidden_size = int(text_config.hidden_size)
@@ -260,6 +282,8 @@ class HFJSpaceEngine:
                 matrix=matrix,
                 source=self.lens_source,
                 artifact=self.lens_artifact,
+                target_model=self.lens_target_model,
+                metadata_model=metadata_model,
                 layer=self.layer,
                 d_model=int(lens.d_model),
                 n_prompts=int(lens.n_prompts),
@@ -267,6 +291,33 @@ class HFJSpaceEngine:
             self.jacobian_lens_error = None
         except Exception as exc:
             self.jacobian_lens_error = f"Unable to load Jacobian lens: {exc}"
+
+    @classmethod
+    def _model_ids_match(cls, model_name: str, lens_target_model: str) -> bool:
+        return cls._normalize_model_id(model_name) == cls._normalize_model_id(lens_target_model)
+
+    @staticmethod
+    def _normalize_model_id(model_name: str) -> str:
+        return model_name.strip().strip("/").lower()
+
+    def _lens_metadata_model(self) -> str | None:
+        try:
+            from huggingface_hub import hf_hub_download
+
+            path = hf_hub_download(self.lens_source, self._lens_config_filename(self.lens_artifact))
+            with open(path, encoding="utf-8") as handle:
+                for line in handle:
+                    stripped = line.strip()
+                    if stripped.startswith("hf_model_name:"):
+                        return stripped.split(":", 1)[1].strip().strip('"').strip("'")
+        except Exception:
+            return None
+        return None
+
+    @staticmethod
+    def _lens_config_filename(lens_artifact: str) -> str:
+        directory = lens_artifact.rsplit("/", 1)[0] if "/" in lens_artifact else ""
+        return f"{directory}/config.yaml" if directory else "config.yaml"
 
     def _run_monitor(self, request: RunRequest) -> RunResponse:
         assert self.model is not None and self.tokenizer is not None

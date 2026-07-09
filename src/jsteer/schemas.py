@@ -24,6 +24,8 @@ class JacobianLensInfo(BaseModel):
     status: str = "configured"
     source: str = ""
     artifact: str = ""
+    target_model: str = ""
+    metadata_model: str | None = None
     layer: int | None = None
     message: str | None = None
 
