@@ -153,6 +153,32 @@ class HFJSpaceEngine:
             monitor_ids=monitor_ids,
             steering=None,
         )
+        if request.action == "kill":
+            for index, frame in enumerate(decode_frames):
+                frame_peak = self._frame_peak(frame)
+                if frame_peak >= request.threshold:
+                    frame.action = "blocked"
+                    frame.note = "Tripwire crossed during hidden-state decode monitoring."
+                    blocked_frames = frames + decode_frames[: index + 1]
+                    top = frame.top_concepts[0]
+                    return RunResponse(
+                        id=str(uuid.uuid4()),
+                        status="blocked",
+                        mode="monitor",
+                        prompt=request.prompt,
+                        output="",
+                        summary=(
+                            f"Run killed during decode: {top.label} reached "
+                            f"{top.score:.2f} at step {frame.step}."
+                        ),
+                        engine=self.info(),
+                        frames=blocked_frames,
+                        metrics=RunMetrics(
+                            prompt_tokens=int(input_ids.shape[-1]),
+                            completion_tokens=0,
+                            peak_score=max(self._frame_peak(item) for item in blocked_frames),
+                        ),
+                    )
         frames.extend(decode_frames)
         return RunResponse(
             id=str(uuid.uuid4()),
@@ -251,6 +277,8 @@ class HFJSpaceEngine:
                 hidden = outputs.hidden_states[self.layer + 1][0, -1, :]
                 scores = self._score_hidden(hidden, monitor_ids)
                 logits = outputs.logits[:, -1, :]
+                if state is not None:
+                    logits = self._apply_control_phrase_bias(logits, state, generated_ids)
                 next_token = self._sample(logits, request.temperature, request.top_p, request.seed + step)
                 token_id = int(next_token.item())
                 if token_id == self.tokenizer.eos_token_id:
@@ -267,9 +295,15 @@ class HFJSpaceEngine:
                         generated_text=generated_text,
                         top_concepts=scores,
                         action=action,
-                        note="Forward hook edited hidden state." if action == "rewrite" else None,
+                        note=(
+                            "Forward hook edited hidden state; decoder readout favored approved terms."
+                            if action == "rewrite"
+                            else None
+                        ),
                     )
                 )
+                if state is not None and self._control_phrase_complete(state, generated_ids, generated_text):
+                    break
                 current_ids = next_token.reshape(1, 1)
                 attention_mask = torch.cat(
                     [
@@ -288,15 +322,18 @@ class HFJSpaceEngine:
                 handle.remove()
 
     def _steering_state(self, profile: RewriteProfile, request: RunRequest) -> dict[str, Any]:
-        assert self.bank is not None
+        assert self.bank is not None and self.tokenizer is not None
         torch = self.torch
         target = self.bank.directions[profile.target_concept]
         suppressors = [self.bank.directions[concept_id] for concept_id in profile.suppress_concepts]
         suppress = torch.stack(suppressors).mean(dim=0) if suppressors else torch.zeros_like(target)
         delta = request.strength * target - (request.strength * 0.7) * suppress
+        phrase_sequences = self._control_phrase_sequences(profile)
         return {
             "profile": profile,
             "delta": delta,
+            "phrase_sequences": phrase_sequences,
+            "phrase_bias": max(0.0, 4.0 + request.strength * 2.2),
             "threshold": request.threshold,
             "monitor_ids": list(profile.suppress_concepts),
             "interventions": [],
@@ -326,12 +363,78 @@ class HFJSpaceEngine:
                 from_concept=suppress_label,
                 to_concept=CONCEPTS[profile.target_concept].label,
                 strength=float(delta.norm().detach().float().cpu()),
-                reason="Forward hook added target activation and subtracted suppressor activation.",
+                reason=(
+                    "Forward hook added target activation, subtracted suppressor activation, "
+                    "and nudged the decoder readout toward approved control phrases."
+                ),
             )
         )
         if isinstance(output, tuple):
             return (edited, *output[1:])
         return edited
+
+    def _control_phrase_sequences(self, profile: RewriteProfile) -> list[list[int]]:
+        assert self.tokenizer is not None
+        sequences: list[list[int]] = []
+        for phrase in profile.control_phrases:
+            for variant in (phrase, f" {phrase}"):
+                token_ids = self.tokenizer.encode(variant, add_special_tokens=False)
+                if token_ids and token_ids not in sequences:
+                    sequences.append(token_ids)
+        return sequences
+
+    def _apply_control_phrase_bias(
+        self,
+        logits: Any,
+        state: dict[str, Any],
+        generated_ids: list[int],
+    ) -> Any:
+        phrase_sequences: list[list[int]] = state["phrase_sequences"]
+        if not phrase_sequences:
+            return logits
+        if any(self._sequence_seen(generated_ids, sequence) for sequence in phrase_sequences):
+            return logits
+
+        biased = logits.clone()
+        bias = state["phrase_bias"]
+        for sequence in phrase_sequences:
+            if self._sequence_seen(generated_ids, sequence):
+                continue
+            prefix_len = self._matching_suffix_len(generated_ids, sequence)
+            next_index = min(prefix_len, len(sequence) - 1)
+            token_id = sequence[next_index]
+            continuation_bonus = 2.0 if prefix_len else 0.0
+            biased[:, token_id] = biased[:, token_id] + bias + continuation_bonus
+        return biased
+
+    def _control_phrase_complete(
+        self,
+        state: dict[str, Any],
+        generated_ids: list[int],
+        generated_text: str,
+    ) -> bool:
+        phrase_sequences: list[list[int]] = state["phrase_sequences"]
+        if not any(self._sequence_seen(generated_ids, sequence) for sequence in phrase_sequences):
+            return False
+        return generated_text.strip().endswith((".", "!", "?"))
+
+    @staticmethod
+    def _sequence_seen(generated_ids: list[int], sequence: list[int]) -> bool:
+        if len(sequence) > len(generated_ids):
+            return False
+        window = len(sequence)
+        return any(
+            generated_ids[index : index + window] == sequence
+            for index in range(len(generated_ids) - window + 1)
+        )
+
+    @staticmethod
+    def _matching_suffix_len(generated_ids: list[int], sequence: list[int]) -> int:
+        max_len = min(len(generated_ids), len(sequence) - 1)
+        for length in range(max_len, 0, -1):
+            if generated_ids[-length:] == sequence[:length]:
+                return length
+        return 0
 
     def _build_vector_bank(self) -> _VectorBank:
         assert self.model is not None and self.tokenizer is not None and self.torch is not None

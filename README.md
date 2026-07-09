@@ -61,6 +61,19 @@ Defaults:
 - Hugging Face cache volume: `j-steer-hf-cache`
 - Target layer: 58% through the decoder stack unless `JSTEER_LAYER` is set
 
+## Recording Script
+
+Use the deployed app URL and record these two beats:
+
+1. `Tripwire` -> `Catch hidden prompt injection in retrieved content`
+   - Run with `Kill`.
+   - The response should show `BLOCKED`, a prompt-injection readout crossing threshold during decode, and no released output.
+2. `Rewrite` -> `Turn competitor drift into approved brand canon`
+   - Run with the default rewrite profile.
+   - The raw path drifts into generic launch copy, while the steered path emits the approved HeliosCRM canon sentence and shows forward-hook interventions in the ledger.
+
+The intended framing is not that this exactly reproduces Anthropic's private Claude J-lens. It is a Modal-hosted Qwen3 demonstration of the operational pattern: read latent concept activations, terminate unsafe trajectories, and edit the model's hidden-state trajectory toward an enterprise policy attractor.
+
 ## Development Checks
 
 ```bash

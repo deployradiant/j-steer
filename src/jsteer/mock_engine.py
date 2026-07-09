@@ -95,6 +95,14 @@ class MockJSpaceEngine:
             generated = f"{generated} {token}".strip()
             drift = max(0.0, peak_score - idx * 0.025)
             frame_scores = self._decayed_scores(prompt_scores, drift)
+            action = "observe"
+            note = "Risk decays as the answer stays in the approved response lane."
+            if (
+                request.action == "kill"
+                and max((score.score for score in frame_scores), default=0.0) >= request.threshold
+            ):
+                action = "blocked"
+                note = "Tripwire crossed during hidden-state decode monitoring."
             frames.append(
                 TraceFrame(
                     step=idx,
@@ -103,10 +111,30 @@ class MockJSpaceEngine:
                     token=token,
                     generated_text=generated,
                     top_concepts=frame_scores,
-                    action="observe",
-                    note="Risk decays as the answer stays in the approved response lane.",
+                    action=action,
+                    note=note,
                 )
             )
+            if action == "blocked":
+                top = frame_scores[0]
+                return RunResponse(
+                    id=str(uuid.uuid4()),
+                    status="blocked",
+                    mode="monitor",
+                    prompt=request.prompt,
+                    output="",
+                    summary=(
+                        f"Run killed during decode: {top.label} reached "
+                        f"{top.score:.2f} at step {idx}."
+                    ),
+                    engine=self.info(),
+                    frames=frames,
+                    metrics=RunMetrics(
+                        prompt_tokens=max(8, len(request.prompt.split())),
+                        completion_tokens=0,
+                        peak_score=max(self._frame_peak(frame) for frame in frames),
+                    ),
+                )
 
         return RunResponse(
             id=str(uuid.uuid4()),
@@ -336,3 +364,6 @@ class MockJSpaceEngine:
             scores.append(score.model_copy(update={"score": round(updated, 2)}))
         return sorted(scores, key=lambda score: score.score, reverse=True)[:5]
 
+    @staticmethod
+    def _frame_peak(frame: TraceFrame) -> float:
+        return max((score.score for score in frame.top_concepts), default=0.0)
