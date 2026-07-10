@@ -39,6 +39,35 @@ select {
     #fff;
 }
 
+.answer-token {
+  display: inline;
+  border-bottom: 1px solid rgba(23, 23, 23, 0.18);
+  cursor: crosshair;
+}
+
+.answer-token:hover,
+.answer-token:focus {
+  outline: 0;
+  background: rgba(23, 23, 23, 0.08);
+}
+
+.answer-token.is-selected {
+  background: #fff;
+  box-shadow:
+    inset 0 -2px 0 #171717,
+    0 0 0 1px rgba(23, 23, 23, 0.22);
+}
+
+.answer-token.is-tripwire {
+  border-bottom-color: #b42318;
+}
+
+.answer-token.is-selected.is-tripwire {
+  box-shadow:
+    inset 0 -2px 0 #b42318,
+    0 0 0 1px rgba(180, 35, 24, 0.34);
+}
+
 .token-heatmap {
   display: grid;
   gap: 4px;

@@ -662,7 +662,7 @@ function renderResults(): string {
     <div class="grid gap-4 p-4 xl:grid-cols-[minmax(0,1fr)_430px]">
       <div class="min-w-0 space-y-4">
         ${renderImpactPanel(response, visibleFrames)}
-        ${response.mode === "rewrite" ? renderRewriteOutputs(response) : renderMonitorOutput(response)}
+        ${response.mode === "rewrite" ? renderRewriteOutputs(response, visibleFrames, inspectedFrame) : renderMonitorOutput(response, visibleFrames, inspectedFrame)}
         ${renderActivationExplorer(response, visibleFrames, inspectedFrame)}
       </div>
       <div class="min-w-0 space-y-4">
@@ -828,7 +828,7 @@ function statusBadge(status: RunStatus): string {
   return `<span class="inline-flex items-center gap-1 border px-2.5 py-1 text-xs font-semibold ${styles[status]}">${escapeHtml(status.toUpperCase())}</span>`;
 }
 
-function renderMonitorOutput(response: RunResponse): string {
+function renderMonitorOutput(response: RunResponse, frames: TraceFrame[], selectedFrame: TraceFrame | null): string {
   if (response.status === "blocked") {
     return `
       <section class="border border-hazard bg-red-50 p-4">
@@ -845,12 +845,12 @@ function renderMonitorOutput(response: RunResponse): string {
   return `
     <section class="border border-line bg-field p-4">
       <h3 class="mb-2 text-sm font-semibold uppercase tracking-normal text-neutral-500">Output</h3>
-      <p class="whitespace-pre-wrap text-sm leading-6">${escapeHtml(response.output)}</p>
+      <p class="whitespace-pre-wrap text-sm leading-6">${renderGeneratedAnswer(frames, selectedFrame, response.output)}</p>
     </section>
   `;
 }
 
-function renderRewriteOutputs(response: RunResponse): string {
+function renderRewriteOutputs(response: RunResponse, frames: TraceFrame[], selectedFrame: TraceFrame | null): string {
   return `
     <section class="grid gap-3 lg:grid-cols-2">
       <div class="border border-line bg-field p-4">
@@ -865,10 +865,33 @@ function renderRewriteOutputs(response: RunResponse): string {
           <i data-lucide="route" class="h-4 w-4"></i>
           Steered
         </div>
-        <p class="whitespace-pre-wrap text-sm leading-6">${escapeHtml(response.output)}</p>
+        <p class="whitespace-pre-wrap text-sm leading-6">${renderGeneratedAnswer(frames, selectedFrame, response.output)}</p>
       </div>
     </section>
   `;
+}
+
+function renderGeneratedAnswer(frames: TraceFrame[], selectedFrame: TraceFrame | null, fallbackText: string): string {
+  const decodeFrames = frames.filter((frame) => frame.phase === "decode");
+  if (!decodeFrames.length) return escapeHtml(fallbackText);
+  const selectedStep = selectedFrame?.step ?? decodeFrames.at(-1)?.step ?? 0;
+  return decodeFrames
+    .map((frame) => {
+      const token = frame.token || "";
+      if (!token) return "";
+      const selected = frame.step === selectedStep;
+      const tripwire = frame.layer_activations?.some(isTripwireActivation) ?? false;
+      return `
+        <span
+          role="button"
+          tabindex="0"
+          data-frame-step="${frame.step}"
+          class="answer-token ${selected ? "is-selected" : ""} ${tripwire ? "is-tripwire" : ""}"
+          title="step ${frame.step}"
+        >${escapeHtml(token)}</span>
+      `;
+    })
+    .join("");
 }
 
 function selectedTraceFrame(frames: TraceFrame[]): TraceFrame | null {

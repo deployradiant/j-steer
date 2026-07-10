@@ -10,7 +10,7 @@ This repo now compares two latent readouts on an open Qwen model:
 - `Jacobian`: Anthropic's published `jlens` implementation with a pre-fitted Neuronpedia Qwen3-1.7B Jacobian lens. This transports the same residual into the final-layer basis, scores separately calibrated transported concept directions, and decodes top tokens/concept evidence.
 - `Control`: the proxy tripwire/steering score. The Jacobian lane is an independent readout for comparison, not a second kill switch.
 
-The demo opens on `Custom Lens`, where a user generates concept directions from keywords and compares them against the published Qwen3-1.7B Jacobian lens. The other tabs show the same readout machinery in control modes: `Tripwire` kills concerning trajectories before unsafe text is released, and `Rewrite` applies forward-hook activation edits to move generation toward enterprise policy attractors. Run traces include a token-by-layer activation heatmap; hover a produced token or heatmap cell to inspect the winning layer activations, highlighted tripwire layers, and Proxy/Jacobian readout for that token state.
+The demo opens on `Custom Lens`, where a user generates concept directions from keywords and compares them against the published Qwen3-1.7B Jacobian lens. The other tabs show the same readout machinery in control modes: `Tripwire` kills concerning trajectories before unsafe text is released, and `Rewrite` applies forward-hook activation edits to move generation toward enterprise policy attractors. Run traces include a token-by-layer activation heatmap; hover a produced answer token, heatmap column, or heatmap cell to inspect the winning layer activations, highlighted tripwire layers, and Proxy/Jacobian readout for that token state.
 
 Rewrite profiles combine two controls: a hidden-state vector edit at the monitored layer and a decoder constraint that emits an approved control phrase. That keeps the demo crisp enough to record while still exposing the latent before/after trace.
 
@@ -86,7 +86,7 @@ Use the deployed app URL and record these three beats:
 3. `Rewrite` -> `Turn competitor drift into approved brand canon`
    - Run with the default rewrite profile.
    - The raw path drifts into generic launch copy, while the steered path emits the approved HeliosCRM canon sentence and shows forward-hook interventions in the ledger.
-   - Use the `Readout Comparison` panel to narrate where the editable proxy and Jacobian-lens decode agree or diverge.
+   - Hover tokens in the steered answer to highlight their activation columns and narrate where the editable proxy and Jacobian-lens decode agree or diverge.
 
 The intended framing is precise: control is performed with editable concept directions, while the published Jacobian lens is used as an independent J-space readout on the same residual stream.
 
