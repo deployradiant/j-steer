@@ -287,14 +287,14 @@ function render() {
         </div>
       </header>
 
-      <section class="mx-auto grid max-w-[1500px] gap-4 px-4 py-4 sm:px-6 xl:grid-cols-[300px_minmax(0,1fr)_390px]">
-        <aside class="min-w-0 border border-line bg-panel shadow-crisp xl:sticky xl:top-4 xl:self-start">
+      <section class="mx-auto grid max-w-[1500px] gap-4 px-4 py-4 sm:px-6 lg:grid-cols-[280px_minmax(0,1fr)_340px] 2xl:grid-cols-[300px_minmax(0,1fr)_390px]">
+        <aside class="min-w-0 border border-line bg-panel shadow-crisp lg:sticky lg:top-4 lg:self-start">
           ${renderNavigationSidebar()}
         </aside>
         <section class="min-w-0 space-y-4">
           ${renderPromptWorkspace()}
         </section>
-        <aside class="min-w-0 xl:sticky xl:top-4 xl:max-h-[calc(100vh-112px)] xl:overflow-auto">
+        <aside class="min-w-0 lg:sticky lg:top-4 lg:max-h-[calc(100vh-112px)] lg:overflow-auto">
           ${renderModelStateRail()}
         </aside>
       </section>
