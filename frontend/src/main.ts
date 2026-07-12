@@ -291,6 +291,10 @@ function render() {
             ${metricPill("Layer", state.health?.engine.layer.toString() ?? "15")}
             ${metricPill("Device", state.health?.engine.device ?? "Modal GPU")}
             ${metricPill("Policy", policyLabel())}
+            <span class="radiant-wordmark" aria-label="Radiant AI">
+              <span>RADIANT</span>
+              <span class="radiant-wordmark-mark">AI</span>
+            </span>
           </div>
         </div>
       </header>
