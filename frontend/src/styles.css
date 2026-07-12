@@ -9,7 +9,6 @@
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  font-family: "Courier New", Courier, monospace;
 }
 
 body {
@@ -18,7 +17,6 @@ body {
   margin: 0;
   background: #000000;
   color: #ffffff;
-  font-family: "Courier New", Courier, monospace;
 }
 
 button,
@@ -82,9 +80,7 @@ select {
   font-weight: 700;
   letter-spacing: 0;
   line-height: 1;
-  box-shadow:
-    0 0 0 1px rgba(66, 96, 255, 0.18),
-    0 0 24px rgba(66, 96, 255, 0.22);
+  box-shadow: 0 0 18px rgba(66, 96, 255, 0.18);
 }
 
 .radiant-wordmark-mark {
@@ -200,9 +196,7 @@ select {
 }
 
 .shadow-crisp {
-  box-shadow:
-    0 0 0 1px rgba(66, 96, 255, 0.18),
-    0 0 28px rgba(66, 96, 255, 0.1);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.28);
 }
 
 textarea,
@@ -247,10 +241,7 @@ input::placeholder {
 
 .answer-token.is-selected {
   background: rgba(66, 96, 255, 0.18);
-  box-shadow:
-    inset 0 -2px 0 #4260ff,
-    0 0 0 1px rgba(66, 96, 255, 0.44),
-    0 0 18px rgba(66, 96, 255, 0.22);
+  box-shadow: inset 0 -1px 0 #4260ff;
 }
 
 .answer-token.is-tripwire {
@@ -258,10 +249,7 @@ input::placeholder {
 }
 
 .answer-token.is-selected.is-tripwire {
-  box-shadow:
-    inset 0 -2px 0 #ff4d5e,
-    0 0 0 1px rgba(255, 77, 94, 0.44),
-    0 0 18px rgba(255, 77, 94, 0.22);
+  box-shadow: inset 0 -1px 0 #ff4d5e;
 }
 
 .token-heatmap {
@@ -309,7 +297,6 @@ input::placeholder {
   border-color: #4260ff;
   color: #ffffff;
   font-weight: 700;
-  box-shadow: 0 0 16px rgba(66, 96, 255, 0.18);
 }
 
 .heatmap-token {
@@ -328,9 +315,7 @@ input::placeholder {
 .heatmap-token.is-selected {
   border-color: #4260ff;
   color: #ffffff;
-  box-shadow:
-    inset 0 -3px 0 #4260ff,
-    0 0 16px rgba(66, 96, 255, 0.2);
+  box-shadow: inset 0 -1px 0 #4260ff;
 }
 
 .heatmap-token.is-blocked {
@@ -359,16 +344,13 @@ input::placeholder {
 }
 
 .heatmap-cell.is-selected {
-  box-shadow:
-    inset 0 0 0 2px #4260ff,
-    0 0 12px rgba(66, 96, 255, 0.22);
+  border-color: #4260ff;
+  filter: brightness(1.16);
 }
 
 .heatmap-cell.is-tripwire {
   border-color: #ff4d5e;
-  box-shadow:
-    inset 0 0 0 2px #ff4d5e,
-    0 0 12px rgba(255, 77, 94, 0.22);
+  filter: brightness(1.16);
 }
 
 .trace-scroll {
