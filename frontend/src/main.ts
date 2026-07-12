@@ -274,7 +274,7 @@ function render() {
   app.innerHTML = `
     <main class="radiant-shell min-h-screen bg-black text-white">
       <header class="radiant-header border-b border-line bg-panel">
-        <div class="mx-auto flex max-w-[1500px] flex-col gap-3 px-4 py-4 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
+        <div class="mx-auto flex max-w-[1500px] px-4 py-4 sm:px-6">
           <div class="radiant-brand flex min-w-0 items-center gap-3">
             <div class="radiant-logo-mark flex h-12 w-12 shrink-0 items-center justify-center">
               <img src="/radiant-favicon.png" alt="Radiant" class="h-9 w-9" />
@@ -284,24 +284,19 @@ function render() {
               <p class="truncate text-sm text-neutral-600">${escapeHtml(engineLine())}</p>
             </div>
           </div>
-          <div class="flex flex-wrap items-center gap-2 text-xs font-medium">
-            ${enginePill()}
-            ${metricPill("J-lens", lensStatusText())}
-            ${metricPill("Lens Pair", lensPairText())}
-            ${metricPill("Layer", state.health?.engine.layer.toString() ?? "15")}
-            ${metricPill("Device", state.health?.engine.device ?? "Modal GPU")}
-            ${metricPill("Policy", policyLabel())}
-          </div>
         </div>
       </header>
 
-      <section class="mx-auto grid max-w-[1500px] gap-4 px-4 py-4 sm:px-6 lg:grid-cols-[390px_minmax(0,1fr)]">
-        <aside class="min-w-0 border border-line bg-panel shadow-crisp">
-          ${renderControls()}
+      <section class="mx-auto grid max-w-[1500px] gap-4 px-4 py-4 sm:px-6 xl:grid-cols-[300px_minmax(0,1fr)_390px]">
+        <aside class="min-w-0 border border-line bg-panel shadow-crisp xl:sticky xl:top-4 xl:self-start">
+          ${renderNavigationSidebar()}
         </aside>
-        <section class="min-w-0 border border-line bg-panel shadow-crisp">
-          ${renderResults()}
+        <section class="min-w-0 space-y-4">
+          ${renderPromptWorkspace()}
         </section>
+        <aside class="min-w-0 xl:sticky xl:top-4 xl:max-h-[calc(100vh-112px)] xl:overflow-auto">
+          ${renderModelStateRail()}
+        </aside>
       </section>
     </main>
   `;
@@ -382,7 +377,7 @@ function policyLabel(): string {
   return "Custom Lens";
 }
 
-function renderControls(): string {
+function renderNavigationSidebar(): string {
   const profiles = state.profiles;
   const scenarios = isRunMode(state.activeMode)
     ? (profiles?.scenarios.filter((scenario) => scenario.mode === state.activeMode) ?? [])
@@ -397,47 +392,179 @@ function renderControls(): string {
       </div>
     </div>
 
-    <div class="space-y-4 p-4">
-      ${
-        state.activeMode === "custom"
-          ? ""
-          : `<div class="space-y-2">
-              <label class="text-xs font-semibold uppercase tracking-normal text-neutral-500">Scenario</label>
-              <div class="grid gap-2">
-                ${scenarios.map(renderScenarioButton).join("") || skeletonLine("Loading scenarios")}
-              </div>
-            </div>`
-      }
+    <div class="p-4">
+      <div class="mb-2 text-xs font-semibold uppercase tracking-normal text-neutral-500">Scenarios</div>
+      <div class="grid gap-2">
+        ${state.activeMode === "custom" ? renderCustomScenarioButton() : scenarios.map(renderScenarioButton).join("") || skeletonLine("Loading scenarios")}
+      </div>
+    </div>
+  `;
+}
 
-      <div class="space-y-2">
-        <label for="prompt" class="text-xs font-semibold uppercase tracking-normal text-neutral-500">Prompt</label>
-        <textarea id="prompt" class="h-40 w-full resize-none border border-line bg-field px-3 py-2 text-sm leading-5 outline-none focus:border-ink" spellcheck="false">${escapeHtml(state.prompt)}</textarea>
+function renderPromptWorkspace(): string {
+  return `
+    <section class="border border-line bg-panel shadow-crisp">
+      <div class="border-b border-line p-4">
+        <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div class="min-w-0">
+            <div class="mb-1 text-xs font-semibold uppercase tracking-normal text-neutral-500">Prompt</div>
+            <h2 class="text-lg font-semibold">${escapeHtml(promptWorkspaceTitle())}</h2>
+          </div>
+          <span class="inline-flex w-fit items-center border border-line bg-white px-2.5 py-1 text-xs font-semibold">${escapeHtml(policyLabel())}</span>
+        </div>
       </div>
 
-      ${
-        state.activeMode === "monitor"
-          ? renderMonitorControls()
-          : state.activeMode === "rewrite"
-            ? renderRewriteControls()
-            : renderCustomControls()
-      }
+      <div class="space-y-4 p-4">
+        <textarea id="prompt" class="h-48 w-full resize-none border border-line bg-field px-3 py-3 text-sm leading-6 outline-none focus:border-ink lg:h-56" spellcheck="false">${escapeHtml(state.prompt)}</textarea>
+        ${renderRunControls()}
+      </div>
+    </section>
 
-      ${
-        state.activeMode === "custom"
-          ? numberControl("customWindowTokens", "Window", state.customWindowTokens, 8, 128, 1)
-          : `<div class="grid grid-cols-2 gap-3">
-              ${numberControl("maxNewTokens", "Max Tokens", state.maxNewTokens, 8, 256, 1)}
-              ${numberControl("temperature", "Temperature", state.temperature, 0, 2, 0.05)}
-            </div>`
-      }
+    <section class="border border-line bg-panel shadow-crisp">
+      ${renderResults()}
+    </section>
+  `;
+}
 
-      <button id="run" class="flex h-11 w-full items-center justify-center gap-2 bg-ink px-4 text-sm font-semibold text-white disabled:cursor-wait disabled:bg-neutral-500" ${state.loading ? "disabled" : ""}>
-        <i data-lucide="${state.loading ? "loader-circle" : "play"}" class="h-4 w-4 ${state.loading ? "animate-spin" : ""}"></i>
-        ${state.loading ? "Running" : state.activeMode === "custom" ? "Generate Lens" : "Run"}
-      </button>
+function renderRunControls(): string {
+  const controls =
+    state.activeMode === "monitor"
+      ? renderMonitorControls()
+      : state.activeMode === "rewrite"
+        ? renderRewriteControls()
+        : renderCustomControls();
+  const numericControls =
+    state.activeMode === "custom"
+      ? numberControl("customWindowTokens", "Window", state.customWindowTokens, 8, 128, 1)
+      : `<div class="grid grid-cols-2 gap-3">
+          ${numberControl("maxNewTokens", "Max Tokens", state.maxNewTokens, 8, 256, 1)}
+          ${numberControl("temperature", "Temperature", state.temperature, 0, 2, 0.05)}
+        </div>`;
 
-      ${state.error ? `<div class="border border-hazard bg-red-50 px-3 py-2 text-sm text-hazard">${escapeHtml(state.error)}</div>` : ""}
+  return `
+    <div class="grid gap-4 lg:grid-cols-[minmax(0,1fr)_240px]">
+      <div class="min-w-0 space-y-4">
+        ${controls}
+      </div>
+      <div class="space-y-4">
+        ${numericControls}
+        <button id="run" class="flex h-11 w-full items-center justify-center gap-2 bg-ink px-4 text-sm font-semibold text-white disabled:cursor-wait disabled:bg-neutral-500" ${state.loading ? "disabled" : ""}>
+          <i data-lucide="${state.loading ? "loader-circle" : "play"}" class="h-4 w-4 ${state.loading ? "animate-spin" : ""}"></i>
+          ${state.loading ? "Running" : state.activeMode === "custom" ? "Generate Lens" : "Run"}
+        </button>
+        ${state.error ? `<div class="border border-hazard bg-red-50 px-3 py-2 text-sm text-hazard">${escapeHtml(state.error)}</div>` : ""}
+      </div>
     </div>
+  `;
+}
+
+function promptWorkspaceTitle(): string {
+  if (state.activeMode === "monitor") return "Tripwire scenario prompt";
+  if (state.activeMode === "rewrite") return "Rewrite scenario prompt";
+  return "Custom concept lens prompt";
+}
+
+function renderCustomScenarioButton(): string {
+  return `
+    <button data-tab="custom" class="border border-ink bg-white px-3 py-2 text-left">
+      <span class="block text-sm font-semibold">Enterprise buyer lens</span>
+      <span class="mt-1 block text-xs leading-4 text-neutral-600">Security, buying intent, competitor drift.</span>
+    </button>
+  `;
+}
+
+function renderModelStateRail(): string {
+  if (state.result) {
+    const visibleFrames = state.result.frames.slice(0, state.replayCount);
+    const inspectedFrame = selectedTraceFrame(visibleFrames);
+    return `
+      <div class="space-y-4">
+        ${renderModelStatePanel()}
+        ${renderInterventions(state.result)}
+        ${renderTokenInspector(inspectedFrame, state.result)}
+        ${renderReadoutPanel(inspectedFrame ? [inspectedFrame] : visibleFrames)}
+      </div>
+    `;
+  }
+
+  if (state.customResult) {
+    return `
+      <div class="space-y-4">
+        ${renderModelStatePanel()}
+        ${renderTokenInspector(state.customResult.frame, state.customResult)}
+        ${renderReadoutPanel([state.customResult.frame])}
+      </div>
+    `;
+  }
+
+  return `
+    <div class="space-y-4">
+      ${renderModelStatePanel()}
+      ${renderModelStateEmpty()}
+    </div>
+  `;
+}
+
+function renderModelStatePanel(): string {
+  const engine = state.health?.engine ?? state.result?.engine ?? state.customResult?.engine;
+  const lens = engine?.jacobian_lens;
+  const runtime = engine?.mode === "hf" ? "Modal/Qwen" : (engine?.mode ?? "Loading");
+  const lensSource = lens?.source ? `${lens.source}${lens.artifact ? ` / ${lens.artifact}` : ""}` : "Pending";
+  return `
+    <section class="border border-line bg-panel shadow-crisp">
+      <div class="border-b border-line bg-field px-3 py-2">
+        <h3 class="flex items-center gap-2 text-sm font-semibold">
+          <i data-lucide="server" class="h-4 w-4"></i>
+          Model State
+        </h3>
+      </div>
+      <div class="space-y-2 p-3 text-xs">
+        ${stateValueRow("Runtime", runtime)}
+        ${stateValueRow("Model", engine?.model ?? "Qwen/Qwen3-1.7B")}
+        ${stateValueRow("Readout", engine?.readout ?? "hidden-state")}
+        ${stateValueRow("J-Scope Lens", lensStatusText())}
+        ${stateValueRow("Lens Pair", lensPairText())}
+        ${stateValueRow("Lens Source", lensSource)}
+        ${stateValueRow("Layer", engine?.layer.toString() ?? "15")}
+        ${stateValueRow("Device", engine?.device ?? "Modal GPU")}
+        ${stateValueRow("Policy", policyLabel(), true)}
+      </div>
+    </section>
+  `;
+}
+
+function stateValueRow(label: string, value: string, emphasize = false): string {
+  return `
+    <div class="grid grid-cols-[92px_minmax(0,1fr)] items-center gap-2 border border-line bg-white px-2 py-1.5">
+      <span class="text-neutral-500">${escapeHtml(label)}</span>
+      <span class="truncate text-right ${emphasize ? "font-semibold text-white" : "text-neutral-700"}" title="${escapeHtml(value)}">${escapeHtml(value)}</span>
+    </div>
+  `;
+}
+
+function renderModelStateEmpty(): string {
+  return `
+    <section class="border border-line bg-panel shadow-crisp">
+      <div class="border-b border-line bg-field px-3 py-2">
+        <h3 class="text-sm font-semibold">Live Readout</h3>
+      </div>
+      <div class="p-3">
+        <div class="grid items-center gap-1 text-xs text-neutral-500" style="grid-template-columns: 38px repeat(3, minmax(0, 1fr)) 50px;">
+          <span>step</span><span>risk</span><span>claim</span><span>brand</span><span>action</span>
+          ${Array.from({ length: 4 })
+            .map(
+              (_, index) => `
+                <span class="font-mono">${index}</span>
+                ${Array.from({ length: 3 })
+                  .map(() => `<span class="activation-cell" style="--score: 0.14; --cell-color: rgba(66,96,255,0.42);"></span>`)
+                  .join("")}
+                <span class="truncate text-neutral-400">idle</span>
+              `
+            )
+            .join("")}
+        </div>
+      </div>
+    </section>
   `;
 }
 
@@ -617,7 +744,7 @@ function renderResults(): string {
   }
   if (!state.result) {
     return `
-      <div class="grid min-h-[calc(100vh-146px)] place-items-center p-6">
+      <div class="grid min-h-[320px] place-items-center p-6">
         <div class="w-full max-w-3xl border border-line bg-field p-6">
           <div class="mb-5 flex items-center gap-3">
             <div class="flex h-11 w-11 items-center justify-center border border-line bg-white">
@@ -668,17 +795,10 @@ function renderResults(): string {
         </button>
       </div>
     </div>
-    <div class="grid gap-4 p-4 xl:grid-cols-[minmax(0,1fr)_430px]">
-      <div class="min-w-0 space-y-4">
-        ${renderImpactPanel(response, visibleFrames)}
-        ${response.mode === "rewrite" ? renderRewriteOutputs(response, visibleFrames, inspectedFrame) : renderMonitorOutput(response, visibleFrames, inspectedFrame)}
-        ${renderActivationExplorer(response, visibleFrames, inspectedFrame)}
-      </div>
-      <div class="min-w-0 space-y-4">
-        ${renderInterventions(response)}
-        ${renderTokenInspector(inspectedFrame, response)}
-        ${renderReadoutPanel(inspectedFrame ? [inspectedFrame] : visibleFrames)}
-      </div>
+    <div class="space-y-4 p-4">
+      ${renderImpactPanel(response, visibleFrames)}
+      ${response.mode === "rewrite" ? renderRewriteOutputs(response, visibleFrames, inspectedFrame) : renderMonitorOutput(response, visibleFrames, inspectedFrame)}
+      ${renderActivationExplorer(response, visibleFrames, inspectedFrame)}
     </div>
   `;
 }
@@ -686,7 +806,7 @@ function renderResults(): string {
 function renderCustomResults(): string {
   if (!state.customResult) {
     return `
-      <div class="grid min-h-[calc(100vh-146px)] place-items-center p-6">
+      <div class="grid min-h-[320px] place-items-center p-6">
         <div class="w-full max-w-3xl border border-line bg-field p-6">
           <div class="mb-5 flex items-center gap-3">
             <div class="flex h-11 w-11 items-center justify-center border border-line bg-white">
@@ -727,15 +847,10 @@ function renderCustomResults(): string {
       </div>
       <h2 class="text-lg font-semibold">${escapeHtml(response.summary)}</h2>
     </div>
-    <div class="grid gap-4 p-4 xl:grid-cols-[minmax(0,1fr)_430px]">
-      <div class="min-w-0 space-y-4">
-        <section class="grid gap-3 lg:grid-cols-2">
-          ${response.concepts.map(renderCustomLensCard).join("")}
-        </section>
-      </div>
-      <div class="min-w-0 space-y-4">
-        ${renderReadoutPanel([response.frame])}
-      </div>
+    <div class="p-4">
+      <section class="grid gap-3 lg:grid-cols-2">
+        ${response.concepts.map(renderCustomLensCard).join("")}
+      </section>
     </div>
   `;
 }
@@ -1016,7 +1131,7 @@ function renderHeatmapCell(
   `;
 }
 
-function renderTokenInspector(frame: TraceFrame | null, response: RunResponse): string {
+function renderTokenInspector(frame: TraceFrame | null, response: { engine: RunResponse["engine"] }): string {
   if (!frame) {
     return `
       <section class="border border-line bg-field p-4">
@@ -1151,7 +1266,9 @@ function renderReadoutPanel(frames: TraceFrame[]): string {
   const proxyTop = proxyConcepts[0];
   const jacobianTop = jacobianConcepts[0];
   const alignment =
-    proxyTop && jacobianTop
+    !latest
+      ? "Idle"
+      : proxyTop && jacobianTop
       ? proxyTop.id === jacobianTop.id
         ? "Aligned"
         : "Diverged"
