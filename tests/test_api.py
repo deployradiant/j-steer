@@ -3,6 +3,17 @@ from fastapi.testclient import TestClient
 from jsteer.api import create_app
 
 
+def test_static_public_asset(tmp_path) -> None:
+    (tmp_path / "index.html").write_text("<div>app</div>", encoding="utf-8")
+    (tmp_path / "radiant-favicon.png").write_bytes(b"png")
+    client = TestClient(create_app(engine_mode="mock", static_dir=tmp_path))
+
+    response = client.get("/radiant-favicon.png")
+
+    assert response.status_code == 200
+    assert response.content == b"png"
+
+
 def test_profiles_endpoint() -> None:
     client = TestClient(create_app(engine_mode="mock"))
     response = client.get("/api/profiles")

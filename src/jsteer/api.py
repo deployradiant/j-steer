@@ -97,6 +97,9 @@ def mount_static(app: FastAPI, static_dir: str | Path | None = None) -> None:
     def spa_fallback(path: str):
         if path.startswith("api/"):
             raise HTTPException(status_code=404, detail="Not found")
+        static_file = candidate / path
+        if static_file.is_file() and candidate in static_file.resolve().parents:
+            return FileResponse(static_file)
         return FileResponse(index_file)
 
 

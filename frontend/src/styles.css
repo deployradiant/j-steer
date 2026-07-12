@@ -67,25 +67,9 @@ select {
   background: radial-gradient(circle at 50% 42%, rgba(66, 96, 255, 0.12), transparent 28%);
 }
 
-.radiant-wordmark {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  margin-left: 4px;
-  border: 1px solid rgba(66, 96, 255, 0.58);
-  background: rgba(0, 0, 0, 0.76);
-  padding: 6px 9px;
-  color: #ffffff;
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0;
-  line-height: 1;
-  box-shadow: 0 0 18px rgba(66, 96, 255, 0.18);
-}
-
-.radiant-wordmark-mark {
-  color: #8fa1ff;
-  text-shadow: 0 0 14px rgba(66, 96, 255, 0.9);
+.radiant-logo-mark img {
+  display: block;
+  object-fit: contain;
 }
 
 .bg-panel {

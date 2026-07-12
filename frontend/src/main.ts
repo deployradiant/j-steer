@@ -276,8 +276,8 @@ function render() {
       <header class="border-b border-line bg-panel">
         <div class="mx-auto flex max-w-[1500px] flex-col gap-3 px-4 py-4 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
           <div class="flex min-w-0 items-center gap-3">
-            <div class="flex h-10 w-10 shrink-0 items-center justify-center border border-ink bg-ink text-white">
-              <i data-lucide="activity" class="h-5 w-5"></i>
+            <div class="radiant-logo-mark flex h-10 w-10 shrink-0 items-center justify-center border border-ink bg-ink text-white">
+              <img src="/radiant-favicon.png" alt="Radiant" class="h-6 w-6" />
             </div>
             <div class="min-w-0">
               <h1 class="text-xl font-semibold tracking-normal">J-Steer</h1>
@@ -291,10 +291,6 @@ function render() {
             ${metricPill("Layer", state.health?.engine.layer.toString() ?? "15")}
             ${metricPill("Device", state.health?.engine.device ?? "Modal GPU")}
             ${metricPill("Policy", policyLabel())}
-            <span class="radiant-wordmark" aria-label="Radiant AI">
-              <span>RADIANT</span>
-              <span class="radiant-wordmark-mark">AI</span>
-            </span>
           </div>
         </div>
       </header>
@@ -392,8 +388,9 @@ function renderControls(): string {
     ? (profiles?.scenarios.filter((scenario) => scenario.mode === state.activeMode) ?? [])
     : [];
   return `
-    <div class="border-b border-line p-3">
-      <div class="grid grid-cols-3 border border-line bg-field p-1">
+    <div class="border-b border-line p-4">
+      <div class="mb-2 text-xs font-semibold uppercase tracking-normal text-neutral-500">Mode</div>
+      <div class="grid gap-2">
         ${tabButton("monitor", "shield-alert", "Tripwire")}
         ${tabButton("rewrite", "wand-sparkles", "Rewrite")}
         ${tabButton("custom", "radio-tower", "Custom Lens")}
@@ -450,10 +447,18 @@ function isRunMode(mode: AppMode): mode is RunMode {
 
 function tabButton(mode: AppMode, icon: string, label: string): string {
   const active = state.activeMode === mode;
+  const descriptions: Record<AppMode, string> = {
+    monitor: "Detect and kill unsafe latent trajectories.",
+    rewrite: "Apply activation edits during decoding.",
+    custom: "Generate concept lenses and compare readouts."
+  };
   return `
-    <button data-tab="${mode}" class="flex h-9 items-center justify-center gap-2 text-sm font-semibold ${active ? "bg-white text-ink shadow-crisp" : "text-neutral-600 hover:text-ink"}">
-      <i data-lucide="${icon}" class="h-4 w-4"></i>
-      ${label}
+    <button data-tab="${mode}" class="flex min-h-16 items-start gap-3 border px-3 py-3 text-left ${active ? "border-ink bg-white text-ink shadow-crisp" : "border-line bg-field text-neutral-600 hover:border-ink hover:text-ink"}">
+      <i data-lucide="${icon}" class="mt-0.5 h-4 w-4 shrink-0"></i>
+      <span class="min-w-0">
+        <span class="block text-sm font-semibold">${label}</span>
+        <span class="mt-1 block text-xs leading-4 text-neutral-600">${descriptions[mode]}</span>
+      </span>
     </button>
   `;
 }
