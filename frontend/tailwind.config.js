@@ -5,31 +5,29 @@ export default {
     extend: {
       fontFamily: {
         sans: [
-          "Inter",
-          "ui-sans-serif",
-          "system-ui",
-          "-apple-system",
-          "BlinkMacSystemFont",
-          "Segoe UI",
-          "sans-serif"
+          "Courier New",
+          "Courier",
+          "ui-monospace",
+          "SFMono-Regular",
+          "Menlo",
+          "monospace"
         ],
-        mono: ["JetBrains Mono", "SFMono-Regular", "Menlo", "monospace"]
+        mono: ["Courier New", "Courier", "SFMono-Regular", "Menlo", "monospace"]
       },
       colors: {
-        ink: "#171717",
-        panel: "#ffffff",
-        line: "#d8dadd",
-        field: "#f5f6f7",
-        signal: "#0f766e",
-        hazard: "#b42318",
-        amberline: "#a15c07",
-        violetless: "#2f6f9f"
+        ink: "#4260ff",
+        panel: "#03040b",
+        line: "#22306f",
+        field: "#080b18",
+        signal: "#4260ff",
+        hazard: "#ff4d5e",
+        amberline: "#d7ddff",
+        violetless: "#8fa1ff"
       },
       boxShadow: {
-        crisp: "0 1px 0 rgba(15, 23, 42, 0.08)"
+        crisp: "0 0 0 1px rgba(66, 96, 255, 0.22), 0 0 28px rgba(66, 96, 255, 0.1)"
       }
     }
   },
   plugins: []
 };
-

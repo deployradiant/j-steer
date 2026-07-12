@@ -272,7 +272,7 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
 
 function render() {
   app.innerHTML = `
-    <main class="min-h-screen bg-[#eceff1] text-ink">
+    <main class="radiant-shell min-h-screen bg-black text-white">
       <header class="border-b border-line bg-panel">
         <div class="mx-auto flex max-w-[1500px] flex-col gap-3 px-4 py-4 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
           <div class="flex min-w-0 items-center gap-3">
@@ -1082,9 +1082,9 @@ function isTripwireActivation(activation: Pick<LayerActivation | ConceptScore, "
 }
 
 function cellColor(score: Pick<LayerActivation | ConceptScore, "polarity">): string {
-  if (score.polarity === "risk") return "rgba(180,35,24,0.86)";
-  if (score.polarity === "target") return "rgba(15,118,110,0.84)";
-  return "rgba(47,111,159,0.72)";
+  if (score.polarity === "risk") return "rgba(255,77,94,0.9)";
+  if (score.polarity === "target") return "rgba(66,96,255,0.9)";
+  return "rgba(215,221,255,0.72)";
 }
 
 function actionTextClass(action: TraceFrame["action"]): string {
