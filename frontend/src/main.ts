@@ -273,14 +273,14 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
 function render() {
   app.innerHTML = `
     <main class="radiant-shell min-h-screen bg-black text-white">
-      <header class="border-b border-line bg-panel">
+      <header class="radiant-header border-b border-line bg-panel">
         <div class="mx-auto flex max-w-[1500px] flex-col gap-3 px-4 py-4 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
-          <div class="flex min-w-0 items-center gap-3">
-            <div class="radiant-logo-mark flex h-10 w-10 shrink-0 items-center justify-center border border-ink bg-ink text-white">
-              <img src="/radiant-favicon.png" alt="Radiant" class="h-6 w-6" />
+          <div class="radiant-brand flex min-w-0 items-center gap-3">
+            <div class="radiant-logo-mark flex h-12 w-12 shrink-0 items-center justify-center">
+              <img src="/radiant-favicon.png" alt="Radiant" class="h-9 w-9" />
             </div>
             <div class="min-w-0">
-              <h1 class="text-xl font-semibold tracking-normal">J-Steer</h1>
+              <h1 class="text-2xl font-semibold tracking-normal">J-Steer</h1>
               <p class="truncate text-sm text-neutral-600">${escapeHtml(engineLine())}</p>
             </div>
           </div>

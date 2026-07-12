@@ -3,6 +3,69 @@
 @tailwind utilities;
 
 :root {
+  --primary-95: #f4f6ff;
+  --primary-90: #e7ebff;
+  --primary-80: #c9d2ff;
+  --primary-70: #9aaaff;
+  --primary-60: #6f85ff;
+  --primary-50: #4260ff;
+  --primary-40: #2f49db;
+  --primary-30: #22359f;
+  --primary-20: #17266f;
+  --primary-10: #0b1336;
+  --buttercup-100: #fff9db;
+  --buttercup-90: #fff2ad;
+  --buttercup-80: #ffe77a;
+  --buttercup-70: #ffd747;
+  --buttercup-60: #ffc214;
+  --buttercup-50: #d99b00;
+  --buttercup-40: #a87300;
+  --buttercup-30: #7a5200;
+  --buttercup-20: #4d3300;
+  --buttercup-10: #241800;
+  --flame-100: #ffe8ea;
+  --flame-90: #ffc7cc;
+  --flame-80: #ffa3ac;
+  --flame-70: #ff7785;
+  --flame-60: #ff4d5e;
+  --flame-50: #dc2f42;
+  --flame-40: #aa1f2f;
+  --flame-30: #7c1622;
+  --flame-20: #520d15;
+  --flame-10: #2b060b;
+  --slime-100: #edffd8;
+  --slime-90: #d6ffab;
+  --slime-80: #bdff78;
+  --slime-70: #9ef246;
+  --slime-60: #7ad81f;
+  --slime-50: #5cad13;
+  --slime-40: #43820d;
+  --slime-30: #2f5b08;
+  --slime-20: #1e3905;
+  --slime-10: #0d1b02;
+  --dark-rose-100: #ffeaf3;
+  --dark-rose-90: #ffc9df;
+  --dark-rose-80: #ffa3c7;
+  --dark-rose-70: #f477aa;
+  --dark-rose-60: #d94c86;
+  --dark-rose-50: #ae3168;
+  --dark-rose-40: #85244f;
+  --dark-rose-30: #5f1938;
+  --dark-rose-20: #3d0f23;
+  --dark-rose-10: #200711;
+  --grey-100: #ffffff;
+  --grey-95: #f3f4f8;
+  --grey-90: #e4e6ee;
+  --grey-85: #d3d6e2;
+  --grey-80: #bec3d3;
+  --grey-70: #9ba2b8;
+  --grey-60: #7b839e;
+  --grey-50: #5d657e;
+  --grey-40: #444b63;
+  --grey-30: #2f3548;
+  --grey-20: #1d2333;
+  --grey-10: #0d111d;
+  --grey-0: #000000;
   color: #ffffff;
   background: #000000;
   font-synthesis: none;
@@ -67,6 +130,20 @@ select {
   background: radial-gradient(circle at 50% 42%, rgba(66, 96, 255, 0.12), transparent 28%);
 }
 
+.radiant-header {
+  background:
+    linear-gradient(180deg, rgba(66, 96, 255, 0.08), rgba(0, 0, 0, 0)),
+    rgba(0, 0, 0, 0.92);
+}
+
+.radiant-brand {
+  min-height: 56px;
+}
+
+.radiant-logo-mark {
+  background: transparent;
+}
+
 .radiant-logo-mark img {
   display: block;
   object-fit: contain;
@@ -77,7 +154,7 @@ select {
 }
 
 .bg-field {
-  background-color: rgba(7, 10, 24, 0.86);
+  background-color: rgba(5, 7, 19, 0.9);
 }
 
 .bg-white {
@@ -89,15 +166,15 @@ select {
 }
 
 .bg-ink {
-  background-color: #4260ff;
+  background-color: var(--primary-50);
 }
 
 .bg-signal {
-  background-color: #4260ff;
+  background-color: var(--primary-50);
 }
 
 .bg-hazard {
-  background-color: #ff4d5e;
+  background-color: var(--flame-60);
 }
 
 .bg-neutral-500 {
@@ -114,22 +191,22 @@ select {
 }
 
 .border-line {
-  border-color: rgba(66, 96, 255, 0.34);
+  border-color: color-mix(in srgb, var(--primary-20) 82%, transparent);
 }
 
 .border-ink,
 .focus\:border-ink:focus,
 .hover\:border-ink:hover {
-  border-color: #4260ff;
+  border-color: var(--primary-50);
 }
 
 .border-signal,
 .border-violetless {
-  border-color: rgba(66, 96, 255, 0.72);
+  border-color: color-mix(in srgb, var(--primary-50) 72%, transparent);
 }
 
 .border-hazard {
-  border-color: rgba(255, 77, 94, 0.86);
+  border-color: color-mix(in srgb, var(--flame-60) 86%, transparent);
 }
 
 .text-ink,
