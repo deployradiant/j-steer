@@ -427,7 +427,7 @@ function renderRunControls(): string {
         </div>`;
 
   return `
-    <div class="grid gap-4 lg:grid-cols-[minmax(0,1fr)_240px]">
+    <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_240px]">
       <div class="min-w-0 space-y-4">
         ${controls}
       </div>
