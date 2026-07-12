@@ -67,7 +67,7 @@
   --grey-10: #0d111d;
   --grey-0: #000000;
   color: #ffffff;
-  background: #000000;
+  background: #08172a;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -78,7 +78,7 @@ body {
   min-width: 320px;
   min-height: 100vh;
   margin: 0;
-  background: #000000;
+  background: #08172a;
   color: #ffffff;
 }
 
@@ -100,9 +100,9 @@ select {
   position: relative;
   isolation: isolate;
   background:
-    radial-gradient(circle at 50% 0%, rgba(66, 96, 255, 0.18), transparent 32%),
-    radial-gradient(circle at 85% 15%, rgba(66, 96, 255, 0.12), transparent 22%),
-    #000000;
+    radial-gradient(circle at 50% 0%, rgba(66, 96, 255, 0.16), transparent 32%),
+    radial-gradient(circle at 85% 15%, rgba(71, 147, 255, 0.11), transparent 22%),
+    #08172a;
 }
 
 .radiant-shell::before {
@@ -113,12 +113,12 @@ select {
   pointer-events: none;
   background: repeating-linear-gradient(
     0deg,
-    rgba(255, 255, 255, 0.035) 0,
-    rgba(255, 255, 255, 0.035) 1px,
+    rgba(255, 255, 255, 0.028) 0,
+    rgba(255, 255, 255, 0.028) 1px,
     transparent 1px,
     transparent 4px
   );
-  opacity: 0.35;
+  opacity: 0.3;
 }
 
 .radiant-shell::after {
@@ -127,13 +127,13 @@ select {
   inset: 0;
   z-index: -1;
   pointer-events: none;
-  background: radial-gradient(circle at 50% 42%, rgba(66, 96, 255, 0.12), transparent 28%);
+  background: radial-gradient(circle at 50% 42%, rgba(66, 96, 255, 0.1), transparent 28%);
 }
 
 .radiant-header {
   background:
-    linear-gradient(180deg, rgba(66, 96, 255, 0.08), rgba(0, 0, 0, 0)),
-    rgba(0, 0, 0, 0.92);
+    linear-gradient(180deg, rgba(66, 96, 255, 0.1), rgba(8, 23, 42, 0)),
+    rgba(8, 23, 42, 0.94);
 }
 
 .radiant-brand {
@@ -146,23 +146,25 @@ select {
 
 .radiant-logo-mark img {
   display: block;
+  filter: brightness(0) invert(1);
   object-fit: contain;
+  opacity: 0.96;
 }
 
 .bg-panel {
-  background-color: rgba(2, 3, 10, 0.9);
+  background-color: rgba(10, 26, 48, 0.92);
 }
 
 .bg-field {
-  background-color: rgba(5, 7, 19, 0.9);
+  background-color: rgba(7, 20, 38, 0.92);
 }
 
 .bg-white {
-  background-color: rgba(3, 5, 16, 0.96);
+  background-color: rgba(11, 28, 51, 0.96);
 }
 
 .bg-black {
-  background-color: #000000;
+  background-color: #08172a;
 }
 
 .bg-ink {

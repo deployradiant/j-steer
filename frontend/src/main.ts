@@ -322,22 +322,7 @@ function render() {
 }
 
 function engineLine(): string {
-  if (state.health) {
-    const lens = state.health.engine.jacobian_lens;
-    const lensText = lens ? `J-lens ${lens.status}` : "J-lens pending";
-    return `${state.health.engine.model} | ${state.health.engine.readout} | ${lensText}`;
-  }
-  return "Qwen hidden-state control plane on Modal";
-}
-
-function enginePill(): string {
-  const value = state.health?.engine.mode === "hf" ? "Modal/Qwen" : (state.health?.engine.mode ?? "Loading");
-  return `
-    <span class="inline-flex items-center gap-1 border border-line bg-field px-2.5 py-1">
-      <i data-lucide="server" class="h-3.5 w-3.5"></i>
-      ${escapeHtml(value)}
-    </span>
-  `;
+  return "Monitor Qwen activations, flag unsafe concepts, and compare custom concept lenses.";
 }
 
 function metricPill(label: string, value: string): string {
