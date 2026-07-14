@@ -3,6 +3,7 @@
 @tailwind utilities;
 
 :root {
+  --app-header-height: 65px;
   --primary-95: #f4f6ff;
   --primary-90: #e7ebff;
   --primary-80: #c9d2ff;
@@ -134,7 +135,7 @@ select {
 }
 
 .radiant-brand {
-  min-height: 56px;
+  min-height: 48px;
 }
 
 .radiant-logo-mark {
@@ -150,11 +151,11 @@ select {
 
 .workbench-grid {
   grid-template-columns: minmax(0, 1fr);
-  min-height: calc(100vh - 89px);
+  min-height: calc(100vh - var(--app-header-height));
 }
 
 .mode-rail {
-  min-height: calc(100vh - 89px);
+  min-height: calc(100vh - var(--app-header-height));
   transition: width 160ms ease, border-color 160ms ease;
 }
 
@@ -207,8 +208,28 @@ select {
   grid-template-columns: minmax(0, 1fr);
 }
 
+.scenario-row {
+  background: #ffffff;
+  color: #101010;
+}
+
+.scenario-row + .scenario-row {
+  border-top: 1px solid #d8d8d8;
+}
+
+.scenario-row:hover,
+.scenario-row:focus-visible {
+  background: #f8f8f8;
+  outline: 0;
+}
+
+.scenario-row.is-active {
+  background: var(--primary-95);
+  color: var(--primary-40);
+}
+
 .model-rail {
-  min-height: calc(100vh - 89px);
+  min-height: calc(100vh - var(--app-header-height));
   position: relative;
 }
 
@@ -297,10 +318,6 @@ select {
 }
 
 @media (min-width: 768px) {
-  .scenario-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
   .workspace-column {
     padding: 16px 24px;
   }
@@ -313,7 +330,7 @@ select {
   }
 
   .model-rail-scroll {
-    height: calc(100vh - 89px);
+    height: calc(100vh - var(--app-header-height));
     overflow: auto;
   }
 

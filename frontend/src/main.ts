@@ -326,13 +326,13 @@ function render() {
   app.innerHTML = `
     <main class="radiant-shell min-h-screen bg-black text-white">
       <header class="radiant-header border-b border-line bg-panel">
-        <div class="mx-auto flex max-w-[1500px] px-4 py-4 sm:px-6">
+        <div class="mx-auto flex max-w-[1500px] px-4 py-2 sm:px-6">
           <div class="radiant-brand flex min-w-0 items-center gap-3">
-            <div class="radiant-logo-mark flex h-12 w-12 shrink-0 items-center justify-center">
-              <img src="/radiant-mark.png" alt="Radiant" class="h-9 w-9" />
+            <div class="radiant-logo-mark flex h-10 w-10 shrink-0 items-center justify-center">
+              <img src="/radiant-mark.png" alt="Radiant" class="h-8 w-8" />
             </div>
             <div class="min-w-0">
-              <h1 class="text-2xl font-semibold tracking-normal">J-Steer</h1>
+              <h1 class="text-xl font-semibold tracking-normal">J-Steer</h1>
               <p class="truncate text-sm text-neutral-600">${escapeHtml(engineLine())}</p>
             </div>
           </div>
@@ -447,17 +447,8 @@ function renderPromptWorkspace(): string {
   return `
     <section class="border border-line bg-panel shadow-crisp">
       ${renderScenarioPicker()}
-      <div class="border-b border-line p-4">
-        <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div class="min-w-0">
-            <div class="mb-1 text-xs font-semibold uppercase tracking-normal text-neutral-500">Prompt</div>
-            <h2 class="text-lg font-semibold">${escapeHtml(promptWorkspaceTitle())}</h2>
-          </div>
-          <span class="inline-flex w-fit items-center border border-line bg-white px-2.5 py-1 text-xs font-semibold">${escapeHtml(policyLabel())}</span>
-        </div>
-      </div>
-
       <div class="space-y-4 p-4">
+        <label for="prompt" class="sr-only">Prompt</label>
         <textarea id="prompt" class="h-48 w-full resize-none border border-line bg-field px-3 py-3 text-sm leading-6 outline-none focus:border-ink lg:h-56${lockedClass()}" spellcheck="false" ${lockedAttr()}>${escapeHtml(state.prompt)}</textarea>
         ${renderRunControls()}
       </div>
@@ -483,7 +474,7 @@ function renderScenarioPicker(): string {
         <div class="text-xs font-semibold uppercase tracking-normal text-neutral-500">Scenarios</div>
         <span class="text-xs text-neutral-500">${escapeHtml(policyLabel())}</span>
       </div>
-      <div class="scenario-grid grid gap-2">
+      <div class="scenario-grid grid border border-line">
         ${body}
       </div>
     </div>
@@ -529,17 +520,11 @@ function renderRunControls(): string {
   `;
 }
 
-function promptWorkspaceTitle(): string {
-  if (state.activeMode === "monitor") return "Tripwire scenario prompt";
-  if (state.activeMode === "rewrite") return "Rewrite scenario prompt";
-  return "Custom concept lens prompt";
-}
-
 function renderCustomScenarioButton(): string {
   return `
-    <button data-tab="custom" class="border border-ink bg-white px-3 py-2 text-left${lockedClass()}" ${lockedAttr()}>
-      <span class="block text-sm font-semibold">Enterprise buyer lens</span>
-      <span class="mt-1 block text-xs leading-4 text-neutral-600">Security, buying intent, competitor drift.</span>
+    <button data-tab="custom" class="scenario-row is-active flex w-full items-center justify-between gap-4 px-3 py-2.5 text-left${lockedClass()}" ${lockedAttr()}>
+      <span class="text-sm font-semibold">Enterprise buyer lens</span>
+      <span class="text-right text-xs leading-4 text-neutral-600">Security, buying intent, competitor drift.</span>
     </button>
   `;
 }
@@ -742,9 +727,9 @@ function tabButton(mode: AppMode, icon: string, label: string): string {
 function renderScenarioButton(scenario: ScenarioPublic): string {
   const active = state.prompt === scenario.prompt;
   return `
-    <button data-scenario="${scenario.id}" class="min-h-16 border px-3 py-2 text-left text-sm${lockedClass()} ${active ? "border-ink bg-white shadow-crisp" : "border-line bg-white hover:border-neutral-500"}" ${lockedAttr()}>
-      <span class="block font-semibold">${escapeHtml(scenario.label)}</span>
-      <span class="mt-1 block text-xs leading-4 text-neutral-600">${escapeHtml(scenario.action === "kill" ? "Tripwire threshold demo" : "Steering rewrite demo")}</span>
+    <button data-scenario="${scenario.id}" class="scenario-row ${active ? "is-active" : ""} flex w-full items-center justify-between gap-4 px-3 py-2.5 text-left text-sm${lockedClass()}" ${lockedAttr()}>
+      <span class="font-semibold">${escapeHtml(scenario.label)}</span>
+      <span class="shrink-0 text-right text-xs leading-4 text-neutral-600">${escapeHtml(scenario.action === "kill" ? "Tripwire threshold demo" : "Steering rewrite demo")}</span>
     </button>
   `;
 }
