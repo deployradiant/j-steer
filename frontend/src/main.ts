@@ -340,16 +340,16 @@ function render() {
       </header>
 
       <section
-        class="workbench-grid mx-auto grid max-w-[1500px] gap-4 px-4 py-4 sm:px-6"
+        class="workbench-grid grid"
         style="--mode-rail-width: ${state.modeRailCollapsed ? 72 : 280}px; --model-rail-width: ${state.modelRailWidth}px;"
       >
-        <aside class="mode-rail min-w-0 border border-line bg-panel shadow-crisp lg:sticky lg:top-4 lg:self-start ${state.modeRailCollapsed ? "is-collapsed" : ""}">
+        <aside class="mode-rail min-w-0 border-r border-line bg-panel ${state.modeRailCollapsed ? "is-collapsed" : ""}">
           ${renderNavigationSidebar()}
         </aside>
-        <section class="min-w-0 space-y-4">
+        <section class="workspace-column min-w-0 space-y-4">
           ${renderPromptWorkspace()}
         </section>
-        <aside class="model-rail min-w-0 lg:sticky lg:top-4">
+        <aside class="model-rail min-w-0 border-l border-line bg-panel">
           <button id="model-rail-resizer" class="model-rail-resizer hidden lg:flex" type="button" aria-label="Resize model state sidebar" title="Drag to resize">
             <i data-lucide="grip-vertical" class="h-4 w-4"></i>
           </button>
@@ -429,14 +429,14 @@ function policyLabel(): string {
 function renderNavigationSidebar(): string {
   const collapsed = state.modeRailCollapsed;
   return `
-    <div class="p-3">
-      <div class="mb-2 flex items-center justify-between gap-2">
+    <div>
+      <div class="flex h-12 items-center justify-between gap-2 border-b border-line px-3">
         <div class="mode-rail-heading text-xs font-semibold uppercase tracking-normal text-neutral-500">Mode</div>
-        <button id="toggle-mode-rail" class="flex h-8 w-8 shrink-0 items-center justify-center border border-line bg-white hover:border-ink" type="button" aria-label="${collapsed ? "Expand mode sidebar" : "Collapse mode sidebar"}">
+        <button id="toggle-mode-rail" class="flex h-8 w-8 shrink-0 items-center justify-center hover:text-ink" type="button" aria-label="${collapsed ? "Expand mode sidebar" : "Collapse mode sidebar"}">
           <i data-lucide="${collapsed ? "panel-left-open" : "panel-left-close"}" class="h-4 w-4"></i>
         </button>
       </div>
-      <div class="grid gap-2">
+      <div class="grid">
         ${tabButton("monitor", "shield-alert", "Tripwire")}
         ${tabButton("rewrite", "wand-sparkles", "Rewrite")}
         ${tabButton("custom", "radio-tower", "Custom Lens")}
@@ -551,7 +551,7 @@ function renderModelStateRail(): string {
     const visibleFrames = state.result.frames.slice(0, state.replayCount);
     const inspectedFrame = selectedTraceFrame(visibleFrames);
     return `
-      <div class="space-y-4">
+      <div class="rail-stack">
         ${renderModelStatePanel()}
         ${renderJSpaceInjectionPanel(state.result.jspace_injections)}
         ${renderInterventions(state.result)}
@@ -563,7 +563,7 @@ function renderModelStateRail(): string {
 
   if (state.customResult) {
     return `
-      <div class="space-y-4">
+      <div class="rail-stack">
         ${renderModelStatePanel()}
         ${renderJSpaceInjectionPanel(state.customResult.jspace_injections)}
         ${renderTokenInspector(state.customResult.frame, state.customResult)}
@@ -573,7 +573,7 @@ function renderModelStateRail(): string {
   }
 
   return `
-    <div class="space-y-4">
+    <div class="rail-stack">
       ${renderModelStatePanel()}
       ${renderJSpaceInjectionPanel([])}
       ${renderModelStateEmpty()}
@@ -587,14 +587,14 @@ function renderModelStatePanel(): string {
   const runtime = engine?.mode === "hf" ? "Modal/Qwen" : (engine?.mode ?? "Loading");
   const lensSource = lens?.source ? `${lens.source}${lens.artifact ? ` / ${lens.artifact}` : ""}` : "Pending";
   return `
-    <section class="border border-line bg-panel shadow-crisp">
-      <div class="border-b border-line bg-field px-3 py-2">
+    <section class="rail-section">
+      <div class="rail-section-header">
         <h3 class="flex items-center gap-2 text-sm font-semibold">
           <i data-lucide="server" class="h-4 w-4"></i>
           Model State
         </h3>
       </div>
-      <div class="space-y-2 p-3 text-xs">
+      <div class="text-xs">
         ${stateValueRow("Runtime", runtime)}
         ${stateValueRow("Model", engine?.model ?? "Qwen/Qwen3-1.7B")}
         ${stateValueRow("Readout", engine?.readout ?? "hidden-state")}
@@ -611,7 +611,7 @@ function renderModelStatePanel(): string {
 
 function stateValueRow(label: string, value: string, emphasize = false): string {
   return `
-    <div class="grid grid-cols-[92px_minmax(0,1fr)] items-center gap-2 border border-line bg-white px-2 py-1.5">
+    <div class="grid grid-cols-[92px_minmax(0,1fr)] items-center gap-2 border-b border-line px-3 py-2">
       <span class="text-neutral-500">${escapeHtml(label)}</span>
       <span class="truncate text-right ${emphasize ? "font-semibold text-white" : "text-neutral-700"}" title="${escapeHtml(value)}">${escapeHtml(value)}</span>
     </div>
@@ -620,8 +620,8 @@ function stateValueRow(label: string, value: string, emphasize = false): string 
 
 function renderModelStateEmpty(): string {
   return `
-    <section class="border border-line bg-panel shadow-crisp">
-      <div class="border-b border-line bg-field px-3 py-2">
+    <section class="rail-section">
+      <div class="rail-section-header">
         <h3 class="text-sm font-semibold">Live Readout</h3>
       </div>
       <div class="p-3">
@@ -646,14 +646,14 @@ function renderModelStateEmpty(): string {
 
 function renderJSpaceInjectionPanel(injections: JSpaceInjection[]): string {
   return `
-    <section class="border border-line">
-      <div class="border-b border-line bg-field px-3 py-2">
+    <section class="rail-section">
+      <div class="rail-section-header">
         <div class="flex items-center justify-between gap-3">
           <h3 class="flex items-center gap-2 text-sm font-semibold">
             <i data-lucide="database" class="h-4 w-4"></i>
             Lookup Injection
           </h3>
-          <span class="border border-line bg-white px-2 py-0.5 text-[11px] font-semibold">${injections.length}</span>
+          <span class="text-[11px] font-semibold text-neutral-500">${injections.length}</span>
         </div>
       </div>
       <div class="divide-y divide-line">
@@ -678,7 +678,7 @@ function renderJSpaceInjection(injection: JSpaceInjection): string {
         <span class="border border-line bg-white px-1.5 py-0.5 text-[10px] font-semibold">${escapeHtml(injection.keyword)}</span>
       </div>
       <p class="text-xs leading-5 text-neutral-600">${escapeHtml(injection.summary)}</p>
-      <div class="mt-2 border border-line bg-white p-2">
+      <div class="mt-2 border-l border-line pl-2">
         <div class="mb-1 text-[10px] font-semibold uppercase tracking-normal text-neutral-500">Injected</div>
         <p class="text-[11px] leading-4 text-neutral-600">${escapeHtml(injection.injected_text)}</p>
       </div>
@@ -708,7 +708,7 @@ function tabButton(mode: AppMode, icon: string, label: string): string {
     custom: "Generate concept lenses and compare readouts."
   };
   return `
-    <button data-tab="${mode}" class="flex border${lockedClass()} ${collapsed ? "h-11 items-center justify-center px-0" : "min-h-16 items-start gap-3 px-3 py-3 text-left"} ${active ? "border-ink bg-white text-ink shadow-crisp" : "border-line bg-field text-neutral-600 hover:border-ink hover:text-ink"}" title="${escapeHtml(label)}" ${lockedAttr()}>
+    <button data-tab="${mode}" class="flex w-full border-b border-l-2 border-line${lockedClass()} ${collapsed ? "h-12 items-center justify-center px-0" : "min-h-20 items-start gap-3 px-3 py-3 text-left"} ${active ? "border-l-ink bg-white text-ink" : "border-l-transparent text-neutral-600 hover:bg-field hover:text-ink"}" title="${escapeHtml(label)}" ${lockedAttr()}>
       <i data-lucide="${icon}" class="${collapsed ? "h-4 w-4" : "mt-0.5 h-4 w-4"} shrink-0"></i>
       ${
         collapsed
@@ -1279,23 +1279,25 @@ function renderHeatmapCell(
 function renderTokenInspector(frame: TraceFrame | null, response: { engine: RunResponse["engine"] }): string {
   if (!frame) {
     return `
-      <section class="border border-line bg-field p-4">
-        <div class="text-sm font-semibold">Token Inspector</div>
+      <section class="rail-section">
+        <div class="rail-section-header">
+          <div class="text-sm font-semibold">Token Inspector</div>
+        </div>
       </section>
     `;
   }
   const strongest = [...(frame.layer_activations ?? [])].sort((left, right) => right.score - left.score).slice(0, 6);
   const tripwires = strongest.filter(isTripwireActivation);
   return `
-    <section class="border border-line">
-      <div class="border-b border-line bg-field px-3 py-2">
+    <section class="rail-section">
+      <div class="rail-section-header">
         <div class="flex items-center justify-between gap-3">
           <h3 class="text-sm font-semibold">Token Inspector</h3>
           <span class="font-mono text-xs ${actionTextClass(frame.action)}">${escapeHtml(frame.action)}</span>
         </div>
       </div>
-      <div class="space-y-3 p-3">
-        <div class="border border-line bg-white p-3">
+      <div>
+        <div class="border-b border-line p-3">
           <div class="mb-1 flex items-center justify-between gap-3">
             <span class="font-mono text-xs text-neutral-500">step ${frame.step} / ${frame.phase}</span>
             <span class="font-mono text-xs">L${response.engine.layer}</span>
@@ -1303,17 +1305,17 @@ function renderTokenInspector(frame: TraceFrame | null, response: { engine: RunR
           <div class="break-words text-sm font-semibold">${escapeHtml(tokenLabel(frame))}</div>
           ${frame.note ? `<p class="mt-2 text-xs leading-5 text-neutral-600">${escapeHtml(frame.note)}</p>` : ""}
         </div>
-        <div class="border border-line bg-white">
-          <div class="border-b border-line px-2 py-1.5 text-xs font-semibold">Tripwire Layers</div>
+        <div>
+          <div class="border-b border-line px-3 py-2 text-xs font-semibold">Tripwire Layers</div>
           ${
             tripwires.length
               ? tripwires.map(renderLayerActivationRow).join("")
-              : `<div class="p-2 text-xs text-neutral-500">No risk layer crosses ${state.threshold.toFixed(2)} for this token.</div>`
+              : `<div class="border-b border-line p-3 text-xs text-neutral-500">No risk layer crosses ${state.threshold.toFixed(2)} for this token.</div>`
           }
         </div>
-        <div class="border border-line bg-white">
-          <div class="border-b border-line px-2 py-1.5 text-xs font-semibold">Strongest Layers</div>
-          ${strongest.length ? strongest.map(renderLayerActivationRow).join("") : `<div class="p-2 text-xs text-neutral-500">No layer scan.</div>`}
+        <div>
+          <div class="border-b border-line px-3 py-2 text-xs font-semibold">Strongest Layers</div>
+          ${strongest.length ? strongest.map(renderLayerActivationRow).join("") : `<div class="p-3 text-xs text-neutral-500">No layer scan.</div>`}
         </div>
       </div>
     </section>
@@ -1365,18 +1367,20 @@ function actionTextClass(action: TraceFrame["action"]): string {
 function renderInterventions(response: RunResponse): string {
   if (response.interventions.length === 0) {
     return `
-      <section class="border border-line bg-field p-4">
-        <div class="mb-2 flex items-center gap-2 text-sm font-semibold">
-          <i data-lucide="scissors-line-dashed" class="h-4 w-4"></i>
-          Intervention Ledger
+      <section class="rail-section">
+        <div class="rail-section-header">
+          <div class="flex items-center gap-2 text-sm font-semibold">
+            <i data-lucide="scissors-line-dashed" class="h-4 w-4"></i>
+            Intervention Ledger
+          </div>
         </div>
-        <p class="text-sm text-neutral-600">No rewrites recorded.</p>
+        <p class="p-3 text-sm text-neutral-600">No rewrites recorded.</p>
       </section>
     `;
   }
   return `
-    <section class="border border-line">
-      <div class="border-b border-line bg-field px-3 py-2">
+    <section class="rail-section">
+      <div class="rail-section-header">
         <h3 class="flex items-center gap-2 text-sm font-semibold">
           <i data-lucide="scissors-line-dashed" class="h-4 w-4"></i>
           Intervention Ledger
@@ -1421,17 +1425,17 @@ function renderReadoutPanel(frames: TraceFrame[]): string {
         ? "Lens Only"
         : "Proxy Only";
   return `
-    <section class="border border-line">
-      <div class="border-b border-line bg-field px-3 py-2">
+    <section class="rail-section">
+      <div class="rail-section-header">
         <div class="flex items-center justify-between gap-3">
           <h3 class="flex items-center gap-2 text-sm font-semibold">
             <i data-lucide="radio-tower" class="h-4 w-4"></i>
             Readout Comparison
           </h3>
-          <span class="border border-line bg-white px-2 py-0.5 text-[11px] font-semibold">${escapeHtml(alignment)}</span>
+          <span class="text-[11px] font-semibold text-neutral-500">${escapeHtml(alignment)}</span>
         </div>
       </div>
-      <div class="space-y-3 p-3">
+      <div>
         ${renderReadoutLane("Control", controlConcepts, "bg-ink text-white")}
         ${renderReadoutLane("Proxy", proxyConcepts, "bg-field text-ink")}
         ${renderReadoutLane("Jacobian", jacobianConcepts, "bg-sky-50 text-violetless", latest?.jacobian_tokens ?? [])}
@@ -1442,8 +1446,8 @@ function renderReadoutPanel(frames: TraceFrame[]): string {
 
 function renderReadoutLane(title: string, concepts: ConceptScore[], titleClass: string, tokens: string[] = []): string {
   return `
-    <div class="border border-line bg-white">
-      <div class="flex items-center justify-between gap-2 border-b border-line px-2 py-1.5">
+    <div class="border-b border-line">
+      <div class="flex items-center justify-between gap-2 border-b border-line px-3 py-2">
         <span class="px-1.5 py-0.5 text-xs font-semibold ${titleClass}">${escapeHtml(title)}</span>
         ${concepts[0] ? `<span class="font-mono text-xs">${concepts[0].score.toFixed(2)}</span>` : ""}
       </div>
