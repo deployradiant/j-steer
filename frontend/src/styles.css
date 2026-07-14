@@ -67,7 +67,7 @@
   --grey-10: #0d111d;
   --grey-0: #000000;
   color: #ffffff;
-  background: #08172a;
+  background: #071426;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -78,7 +78,7 @@ body {
   min-width: 320px;
   min-height: 100vh;
   margin: 0;
-  background: #08172a;
+  background: #071426;
   color: #ffffff;
 }
 
@@ -99,14 +99,12 @@ select {
 .radiant-shell {
   position: relative;
   isolation: isolate;
-  background:
-    radial-gradient(circle at 50% 0%, rgba(66, 96, 255, 0.16), transparent 32%),
-    radial-gradient(circle at 85% 15%, rgba(71, 147, 255, 0.11), transparent 22%),
-    #08172a;
+  background: #071426;
 }
 
 .radiant-shell::before {
   content: "";
+  display: none;
   position: fixed;
   inset: 0;
   z-index: -1;
@@ -123,6 +121,7 @@ select {
 
 .radiant-shell::after {
   content: "";
+  display: none;
   position: fixed;
   inset: 0;
   z-index: -1;
@@ -131,9 +130,7 @@ select {
 }
 
 .radiant-header {
-  background:
-    linear-gradient(180deg, rgba(66, 96, 255, 0.1), rgba(8, 23, 42, 0)),
-    rgba(8, 23, 42, 0.94);
+  background: #071426;
 }
 
 .radiant-brand {
@@ -164,7 +161,7 @@ select {
 }
 
 .bg-black {
-  background-color: #08172a;
+  background-color: #071426;
 }
 
 .bg-ink {
