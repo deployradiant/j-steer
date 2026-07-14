@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Iterable
 from typing import Protocol
 
 from .mock_engine import MockJSpaceEngine
@@ -11,6 +12,8 @@ class JSpaceEngine(Protocol):
     def info(self) -> EngineInfo: ...
 
     def run(self, request: RunRequest) -> RunResponse: ...
+
+    def stream_run(self, request: RunRequest) -> Iterable[dict[str, object]]: ...
 
     def custom_lens(self, request: CustomLensRequest) -> CustomLensResponse: ...
 

@@ -1,6 +1,7 @@
 import "./styles.css";
 import {
   Activity,
+  Database,
   GripVertical,
   LoaderCircle,
   OctagonX,
@@ -22,7 +23,7 @@ import {
 type RunMode = "monitor" | "rewrite";
 type AppMode = RunMode | "custom";
 type MonitorAction = "observe" | "kill";
-type RunStatus = "completed" | "blocked" | "rewritten" | "error";
+type RunStatus = "running" | "completed" | "blocked" | "rewritten" | "cancelled" | "error";
 type ConceptPolarity = "risk" | "target" | "neutral";
 
 interface ConceptPublic {
@@ -111,6 +112,17 @@ interface Intervention {
   reason: string;
 }
 
+interface JSpaceInjection {
+  id: string;
+  keyword: string;
+  title: string;
+  source: string;
+  summary: string;
+  injected_text: string;
+  concept_targets: string[];
+  target: "custom_lens" | "rewrite_controller";
+}
+
 interface RunResponse {
   id: string;
   status: RunStatus;
@@ -130,6 +142,7 @@ interface RunResponse {
   frames: TraceFrame[];
   baseline_frames: TraceFrame[];
   interventions: Intervention[];
+  jspace_injections: JSpaceInjection[];
   metrics: {
     latency_ms: number;
     prompt_tokens: number;
@@ -163,12 +176,33 @@ interface CustomLensResponse {
   engine: RunResponse["engine"];
   frame: TraceFrame;
   concepts: CustomConceptLens[];
+  jspace_injections: JSpaceInjection[];
   metrics: RunResponse["metrics"];
 }
 
 interface HealthResponse {
   ok: boolean;
   engine: RunResponse["engine"];
+}
+
+interface RunRequestPayload {
+  mode: RunMode;
+  prompt: string;
+  monitor_ids: string[];
+  rewrite_profile_id: string;
+  action: MonitorAction;
+  threshold: number;
+  max_new_tokens: number;
+  temperature: number;
+  strength: number;
+  compare_baseline: boolean;
+}
+
+interface RunStreamEvent {
+  type: "start" | "frame" | "baseline_frame" | "done" | "error";
+  response?: RunResponse;
+  frame?: TraceFrame;
+  message?: string;
 }
 
 interface State {
@@ -192,6 +226,7 @@ interface State {
   modeRailCollapsed: boolean;
   modelRailWidth: number;
   loading: boolean;
+  cancelRequested: boolean;
   error: string | null;
 }
 
@@ -199,6 +234,7 @@ const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 const CUSTOM_DEFAULT_PROMPT =
   "A regulated enterprise buyer asks whether HeliosCRM is safe enough for support operations. Their notes mention SOC 2, audit logs, SSO, private customer records, pricing approval, procurement, and Salesforce alternatives.";
 let replayTimer: number | null = null;
+let activeRunController: AbortController | null = null;
 
 const state: State = {
   activeMode: "custom",
@@ -237,6 +273,7 @@ const state: State = {
   modeRailCollapsed: false,
   modelRailWidth: 360,
   loading: false,
+  cancelRequested: false,
   error: null
 };
 
@@ -275,6 +312,14 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error(body || `HTTP ${response.status}`);
   }
   return (await response.json()) as T;
+}
+
+function lockedAttr(): string {
+  return state.loading ? "disabled" : "";
+}
+
+function lockedClass(): string {
+  return state.loading ? " disabled:cursor-not-allowed disabled:opacity-60" : "";
 }
 
 function render() {
@@ -320,6 +365,7 @@ function render() {
   createIcons({
     icons: {
       Activity,
+      Database,
       GripVertical,
       LoaderCircle,
       OctagonX,
@@ -414,7 +460,7 @@ function renderPromptWorkspace(): string {
       </div>
 
       <div class="space-y-4 p-4">
-        <textarea id="prompt" class="h-48 w-full resize-none border border-line bg-field px-3 py-3 text-sm leading-6 outline-none focus:border-ink lg:h-56" spellcheck="false">${escapeHtml(state.prompt)}</textarea>
+        <textarea id="prompt" class="h-48 w-full resize-none border border-line bg-field px-3 py-3 text-sm leading-6 outline-none focus:border-ink lg:h-56${lockedClass()}" spellcheck="false" ${lockedAttr()}>${escapeHtml(state.prompt)}</textarea>
         ${renderRunControls()}
       </div>
     </section>
@@ -468,10 +514,17 @@ function renderRunControls(): string {
       </div>
       <div class="space-y-4">
         ${numericControls}
-        <button id="run" class="flex h-11 w-full items-center justify-center gap-2 bg-ink px-4 text-sm font-semibold text-white disabled:cursor-wait disabled:bg-neutral-500" ${state.loading ? "disabled" : ""}>
-          <i data-lucide="${state.loading ? "loader-circle" : "play"}" class="h-4 w-4 ${state.loading ? "animate-spin" : ""}"></i>
-          ${state.loading ? "Running" : state.activeMode === "custom" ? "Generate Lens" : "Run"}
-        </button>
+        ${
+          state.loading
+            ? `<button id="cancel-run" class="flex h-11 w-full items-center justify-center gap-2 border border-hazard bg-red-50 px-4 text-sm font-semibold text-hazard" ${state.cancelRequested ? "disabled" : ""}>
+                <i data-lucide="${state.cancelRequested ? "loader-circle" : "octagon-x"}" class="h-4 w-4 ${state.cancelRequested ? "animate-spin" : ""}"></i>
+                ${state.cancelRequested ? "Cancelling" : "Cancel Run"}
+              </button>`
+            : `<button id="run" class="flex h-11 w-full items-center justify-center gap-2 bg-ink px-4 text-sm font-semibold text-white">
+                <i data-lucide="play" class="h-4 w-4"></i>
+                ${state.activeMode === "custom" ? "Generate Lens" : "Run"}
+              </button>`
+        }
         ${state.error ? `<div class="border border-hazard bg-red-50 px-3 py-2 text-sm text-hazard">${escapeHtml(state.error)}</div>` : ""}
       </div>
     </div>
@@ -486,7 +539,7 @@ function promptWorkspaceTitle(): string {
 
 function renderCustomScenarioButton(): string {
   return `
-    <button data-tab="custom" class="border border-ink bg-white px-3 py-2 text-left">
+    <button data-tab="custom" class="border border-ink bg-white px-3 py-2 text-left${lockedClass()}" ${lockedAttr()}>
       <span class="block text-sm font-semibold">Enterprise buyer lens</span>
       <span class="mt-1 block text-xs leading-4 text-neutral-600">Security, buying intent, competitor drift.</span>
     </button>
@@ -500,6 +553,7 @@ function renderModelStateRail(): string {
     return `
       <div class="space-y-4">
         ${renderModelStatePanel()}
+        ${renderJSpaceInjectionPanel(state.result.jspace_injections)}
         ${renderInterventions(state.result)}
         ${renderTokenInspector(inspectedFrame, state.result)}
         ${renderReadoutPanel(inspectedFrame ? [inspectedFrame] : visibleFrames)}
@@ -511,6 +565,7 @@ function renderModelStateRail(): string {
     return `
       <div class="space-y-4">
         ${renderModelStatePanel()}
+        ${renderJSpaceInjectionPanel(state.customResult.jspace_injections)}
         ${renderTokenInspector(state.customResult.frame, state.customResult)}
         ${renderReadoutPanel([state.customResult.frame])}
       </div>
@@ -520,6 +575,7 @@ function renderModelStateRail(): string {
   return `
     <div class="space-y-4">
       ${renderModelStatePanel()}
+      ${renderJSpaceInjectionPanel([])}
       ${renderModelStateEmpty()}
     </div>
   `;
@@ -588,6 +644,57 @@ function renderModelStateEmpty(): string {
   `;
 }
 
+function renderJSpaceInjectionPanel(injections: JSpaceInjection[]): string {
+  return `
+    <section class="border border-line">
+      <div class="border-b border-line bg-field px-3 py-2">
+        <div class="flex items-center justify-between gap-3">
+          <h3 class="flex items-center gap-2 text-sm font-semibold">
+            <i data-lucide="database" class="h-4 w-4"></i>
+            Lookup Injection
+          </h3>
+          <span class="border border-line bg-white px-2 py-0.5 text-[11px] font-semibold">${injections.length}</span>
+        </div>
+      </div>
+      <div class="divide-y divide-line">
+        ${
+          injections.length
+            ? injections.slice(0, 4).map(renderJSpaceInjection).join("")
+            : `<div class="p-3 text-xs leading-5 text-neutral-500">No keyword lookup fired.</div>`
+        }
+      </div>
+    </section>
+  `;
+}
+
+function renderJSpaceInjection(injection: JSpaceInjection): string {
+  return `
+    <article class="p-3">
+      <div class="mb-2 flex items-start justify-between gap-3">
+        <div class="min-w-0">
+          <div class="truncate text-sm font-semibold">${escapeHtml(injection.title)}</div>
+          <div class="mt-1 truncate font-mono text-[11px] text-neutral-500">${escapeHtml(injection.source)}</div>
+        </div>
+        <span class="border border-line bg-white px-1.5 py-0.5 text-[10px] font-semibold">${escapeHtml(injection.keyword)}</span>
+      </div>
+      <p class="text-xs leading-5 text-neutral-600">${escapeHtml(injection.summary)}</p>
+      <div class="mt-2 border border-line bg-white p-2">
+        <div class="mb-1 text-[10px] font-semibold uppercase tracking-normal text-neutral-500">Injected</div>
+        <p class="text-[11px] leading-4 text-neutral-600">${escapeHtml(injection.injected_text)}</p>
+      </div>
+      ${
+        injection.concept_targets.length
+          ? `<div class="mt-2 flex flex-wrap gap-1">
+              ${injection.concept_targets
+                .map((target) => `<span class="border border-line bg-field px-1 py-0.5 text-[10px] text-neutral-600">${escapeHtml(target)}</span>`)
+                .join("")}
+            </div>`
+          : ""
+      }
+    </article>
+  `;
+}
+
 function isRunMode(mode: AppMode): mode is RunMode {
   return mode === "monitor" || mode === "rewrite";
 }
@@ -601,7 +708,7 @@ function tabButton(mode: AppMode, icon: string, label: string): string {
     custom: "Generate concept lenses and compare readouts."
   };
   return `
-    <button data-tab="${mode}" class="flex border ${collapsed ? "h-11 items-center justify-center px-0" : "min-h-16 items-start gap-3 px-3 py-3 text-left"} ${active ? "border-ink bg-white text-ink shadow-crisp" : "border-line bg-field text-neutral-600 hover:border-ink hover:text-ink"}" title="${escapeHtml(label)}">
+    <button data-tab="${mode}" class="flex border${lockedClass()} ${collapsed ? "h-11 items-center justify-center px-0" : "min-h-16 items-start gap-3 px-3 py-3 text-left"} ${active ? "border-ink bg-white text-ink shadow-crisp" : "border-line bg-field text-neutral-600 hover:border-ink hover:text-ink"}" title="${escapeHtml(label)}" ${lockedAttr()}>
       <i data-lucide="${icon}" class="${collapsed ? "h-4 w-4" : "mt-0.5 h-4 w-4"} shrink-0"></i>
       ${
         collapsed
@@ -618,7 +725,7 @@ function tabButton(mode: AppMode, icon: string, label: string): string {
 function renderScenarioButton(scenario: ScenarioPublic): string {
   const active = state.prompt === scenario.prompt;
   return `
-    <button data-scenario="${scenario.id}" class="min-h-16 border px-3 py-2 text-left text-sm ${active ? "border-ink bg-white shadow-crisp" : "border-line bg-white hover:border-neutral-500"}">
+    <button data-scenario="${scenario.id}" class="min-h-16 border px-3 py-2 text-left text-sm${lockedClass()} ${active ? "border-ink bg-white shadow-crisp" : "border-line bg-white hover:border-neutral-500"}" ${lockedAttr()}>
       <span class="block font-semibold">${escapeHtml(scenario.label)}</span>
       <span class="mt-1 block text-xs leading-4 text-neutral-600">${escapeHtml(scenario.action === "kill" ? "Tripwire threshold demo" : "Steering rewrite demo")}</span>
     </button>
@@ -647,7 +754,7 @@ function renderMonitorControls(): string {
 function actionButton(action: MonitorAction, label: string): string {
   const active = state.action === action;
   return `
-    <button data-action="${action}" class="px-2.5 py-1 ${active ? "bg-white text-ink shadow-crisp" : "text-neutral-600"}">
+    <button data-action="${action}" class="px-2.5 py-1${lockedClass()} ${active ? "bg-white text-ink shadow-crisp" : "text-neutral-600"}" ${lockedAttr()}>
       ${label}
     </button>
   `;
@@ -658,13 +765,13 @@ function renderConceptChip(concept: ConceptPublic): string {
   const tone =
     concept.polarity === "risk"
       ? selected
-        ? "border-hazard bg-red-50 text-hazard"
-        : "border-line bg-field text-neutral-700"
+      ? "border-hazard bg-red-50 text-hazard"
+      : "border-line bg-field text-neutral-700"
       : selected
         ? "border-signal bg-teal-50 text-signal"
         : "border-line bg-field text-neutral-700";
   return `
-    <button data-concept="${concept.id}" class="inline-flex min-h-8 items-center gap-1.5 border px-2.5 py-1 text-xs font-semibold ${tone}">
+    <button data-concept="${concept.id}" class="inline-flex min-h-8 items-center gap-1.5 border px-2.5 py-1 text-xs font-semibold${lockedClass()} ${tone}" ${lockedAttr()}>
       <span class="h-1.5 w-1.5 ${concept.polarity === "risk" ? "bg-hazard" : "bg-signal"}"></span>
       ${escapeHtml(concept.label)}
     </button>
@@ -688,7 +795,7 @@ function renderRewriteControls(): string {
 function renderProfileButton(profile: RewriteProfilePublic): string {
   const active = state.rewriteProfileId === profile.id;
   return `
-    <button data-profile="${profile.id}" class="border px-3 py-2 text-left ${active ? "border-ink bg-white" : "border-line bg-field hover:border-neutral-500"}">
+    <button data-profile="${profile.id}" class="border px-3 py-2 text-left${lockedClass()} ${active ? "border-ink bg-white" : "border-line bg-field hover:border-neutral-500"}" ${lockedAttr()}>
       <span class="block text-sm font-semibold">${escapeHtml(profile.label)}</span>
       <span class="block truncate text-xs text-neutral-600">${escapeHtml(profile.target_label)}</span>
       <span class="mt-2 flex flex-wrap gap-1">
@@ -716,14 +823,14 @@ function renderCustomConceptEditor(concept: CustomConceptInput, index: number): 
   return `
     <div class="border border-line bg-field p-3">
       <div class="mb-2 grid grid-cols-[minmax(0,1fr)_112px] gap-2">
-        <input data-custom-label="${index}" value="${escapeHtml(concept.label)}" class="h-9 min-w-0 border border-line bg-white px-2 text-sm outline-none focus:border-ink" />
-        <select data-custom-polarity="${index}" class="h-9 border border-line bg-white px-2 text-xs font-semibold outline-none focus:border-ink">
+        <input data-custom-label="${index}" value="${escapeHtml(concept.label)}" class="h-9 min-w-0 border border-line bg-white px-2 text-sm outline-none focus:border-ink${lockedClass()}" ${lockedAttr()} />
+        <select data-custom-polarity="${index}" class="h-9 border border-line bg-white px-2 text-xs font-semibold outline-none focus:border-ink${lockedClass()}" ${lockedAttr()}>
           ${polarityOption("target", concept.polarity)}
           ${polarityOption("risk", concept.polarity)}
           ${polarityOption("neutral", concept.polarity)}
         </select>
       </div>
-      <textarea data-custom-keywords="${index}" class="h-16 w-full resize-none border border-line bg-white px-2 py-1.5 text-xs leading-5 outline-none focus:border-ink" spellcheck="false">${escapeHtml(concept.keywords.join(", "))}</textarea>
+      <textarea data-custom-keywords="${index}" class="h-16 w-full resize-none border border-line bg-white px-2 py-1.5 text-xs leading-5 outline-none focus:border-ink${lockedClass()}" spellcheck="false" ${lockedAttr()}>${escapeHtml(concept.keywords.join(", "))}</textarea>
     </div>
   `;
 }
@@ -739,7 +846,7 @@ function rangeControl(id: "threshold" | "strength", label: string, value: number
         <label for="${id}" class="text-xs font-semibold uppercase tracking-normal text-neutral-500">${label}</label>
         <span class="font-mono text-xs">${value.toFixed(2)}</span>
       </div>
-      <input id="${id}" type="range" min="${min}" max="${max}" step="${step}" value="${value}" class="w-full accent-ink" />
+      <input id="${id}" type="range" min="${min}" max="${max}" step="${step}" value="${value}" class="w-full accent-ink${lockedClass()}" ${lockedAttr()} />
     </div>
   `;
 }
@@ -755,7 +862,7 @@ function numberControl(
   return `
     <label class="space-y-1">
       <span class="text-xs font-semibold uppercase tracking-normal text-neutral-500">${label}</span>
-      <input id="${id}" type="number" min="${min}" max="${max}" step="${step}" value="${value}" class="h-10 w-full border border-line bg-field px-2 text-sm outline-none focus:border-ink" />
+      <input id="${id}" type="number" min="${min}" max="${max}" step="${step}" value="${value}" class="h-10 w-full border border-line bg-field px-2 text-sm outline-none focus:border-ink${lockedClass()}" ${lockedAttr()} />
     </label>
   `;
 }
@@ -812,6 +919,7 @@ function renderResults(): string {
             ${metricPill("Latency", `${response.metrics.latency_ms} ms`)}
             ${metricPill("Peak", response.metrics.peak_score.toFixed(2))}
             ${metricPill("Rewrites", String(response.metrics.rewrites))}
+            ${metricPill("Lookups", String(response.jspace_injections.length))}
           </div>
           <h2 class="text-lg font-semibold">${escapeHtml(response.summary)}</h2>
         </div>
@@ -869,6 +977,7 @@ function renderCustomResults(): string {
         ${metricPill("Latency", `${response.metrics.latency_ms} ms`)}
         ${metricPill("Peak", response.metrics.peak_score.toFixed(2))}
         ${metricPill("Concepts", String(response.concepts.length))}
+        ${metricPill("Lookups", String(response.jspace_injections.length))}
         ${metricPill("Lens Pair", lensPairText())}
       </div>
       <h2 class="text-lg font-semibold">${escapeHtml(response.summary)}</h2>
@@ -937,12 +1046,20 @@ function renderImpactPanel(response: RunResponse, frames: TraceFrame[]): string 
   const action =
     response.status === "blocked"
       ? "Stopped before first token"
+      : response.status === "running"
+        ? "Streaming token states"
+        : response.status === "cancelled"
+          ? "Cancelled by operator"
       : response.status === "rewritten"
         ? `${response.metrics.rewrites} latent edits`
         : "Watched through decode";
   const result =
     response.status === "blocked"
       ? "No unsafe completion released"
+      : response.status === "running"
+        ? "Partial response visible"
+        : response.status === "cancelled"
+          ? "Run stopped early"
       : response.status === "rewritten"
         ? "Enterprise policy attractor active"
         : "Response allowed";
@@ -970,9 +1087,11 @@ function impactCard(label: string, value: string, score: number, polarity: Conce
 
 function statusBadge(status: RunStatus): string {
   const styles: Record<RunStatus, string> = {
+    running: "border-violetless bg-sky-50 text-violetless",
     completed: "border-signal bg-teal-50 text-signal",
     blocked: "border-hazard bg-red-50 text-hazard",
     rewritten: "border-violetless bg-sky-50 text-violetless",
+    cancelled: "border-line bg-field text-neutral-600",
     error: "border-hazard bg-red-50 text-hazard"
   };
   return `<span class="inline-flex items-center gap-1 border px-2.5 py-1 text-xs font-semibold ${styles[status]}">${escapeHtml(status.toUpperCase())}</span>`;
@@ -1487,6 +1606,7 @@ function bindEvents() {
   });
 
   document.querySelector<HTMLButtonElement>("#run")?.addEventListener("click", run);
+  document.querySelector<HTMLButtonElement>("#cancel-run")?.addEventListener("click", cancelRun);
   document.querySelector<HTMLButtonElement>("#replay")?.addEventListener("click", () => {
     if (state.result) startReplay();
   });
@@ -1559,49 +1679,50 @@ function applyScenario(scenario: ScenarioPublic) {
 }
 
 async function run() {
+  if (state.loading) return;
   if (state.activeMode === "custom") {
     await runCustomLens();
     return;
   }
+  const controller = new AbortController();
+  activeRunController = controller;
+  const payload = currentRunPayload();
   state.loading = true;
+  state.cancelRequested = false;
   state.error = null;
-  state.result = null;
+  state.result = createStreamingRun(payload);
   state.customResult = null;
   state.inspectedStep = null;
+  state.replayCount = 0;
   stopReplay();
   render();
 
   try {
-    const result = await fetchJson<RunResponse>("/api/run", {
-      method: "POST",
-      body: JSON.stringify({
-        mode: state.activeMode,
-        prompt: state.prompt,
-        monitor_ids: Array.from(state.monitorIds),
-        rewrite_profile_id: state.rewriteProfileId,
-        action: state.action,
-        threshold: state.threshold,
-        max_new_tokens: state.maxNewTokens,
-        temperature: state.temperature,
-        strength: state.strength,
-        compare_baseline: true
-      })
-    });
-    state.result = result;
-    state.health = { ok: true, engine: result.engine };
-    state.inspectedStep = null;
-    state.replayCount = 0;
-    startReplay();
+    await streamRun(payload, controller.signal);
   } catch (error) {
-    state.error = error instanceof Error ? error.message : "Run failed";
+    if (isAbortError(error)) {
+      markRunCancelled();
+    } else {
+      state.error = error instanceof Error ? error.message : "Run failed";
+      if (state.result) {
+        state.result.status = "error";
+        state.result.summary = "Run failed before completion.";
+      }
+    }
   } finally {
+    if (activeRunController === controller) activeRunController = null;
     state.loading = false;
+    state.cancelRequested = false;
     render();
   }
 }
 
 async function runCustomLens() {
+  if (state.loading) return;
+  const controller = new AbortController();
+  activeRunController = controller;
   state.loading = true;
+  state.cancelRequested = false;
   state.error = null;
   state.result = null;
   state.customResult = null;
@@ -1612,6 +1733,7 @@ async function runCustomLens() {
   try {
     const result = await fetchJson<CustomLensResponse>("/api/custom-lens", {
       method: "POST",
+      signal: controller.signal,
       body: JSON.stringify({
         prompt: state.prompt,
         concepts: state.customConcepts.filter((concept) => concept.label.trim() && concept.keywords.length > 0),
@@ -1622,11 +1744,210 @@ async function runCustomLens() {
     state.health = { ok: true, engine: result.engine };
     state.inspectedStep = null;
   } catch (error) {
-    state.error = error instanceof Error ? error.message : "Custom lens failed";
+    state.error = isAbortError(error)
+      ? "Run cancelled."
+      : error instanceof Error
+        ? error.message
+        : "Custom lens failed";
   } finally {
+    if (activeRunController === controller) activeRunController = null;
     state.loading = false;
+    state.cancelRequested = false;
     render();
   }
+}
+
+function cancelRun() {
+  if (!activeRunController || state.cancelRequested) return;
+  state.cancelRequested = true;
+  activeRunController.abort();
+  markRunCancelled();
+  render();
+}
+
+function currentRunPayload(): RunRequestPayload {
+  return {
+    mode: state.activeMode as RunMode,
+    prompt: state.prompt,
+    monitor_ids: Array.from(state.monitorIds),
+    rewrite_profile_id: state.rewriteProfileId,
+    action: state.action,
+    threshold: state.threshold,
+    max_new_tokens: state.maxNewTokens,
+    temperature: state.temperature,
+    strength: state.strength,
+    compare_baseline: true
+  };
+}
+
+function createStreamingRun(payload: RunRequestPayload): RunResponse {
+  return {
+    id: `pending-${Date.now()}`,
+    status: "running",
+    mode: payload.mode,
+    prompt: payload.prompt,
+    output: "",
+    baseline_output: payload.compare_baseline ? "" : null,
+    summary: "Run streaming token readouts from the active decoder.",
+    engine: streamingEngineInfo(),
+    frames: [],
+    baseline_frames: [],
+    interventions: [],
+    jspace_injections: [],
+    metrics: {
+      latency_ms: 0,
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      peak_score: 0,
+      rewrites: 0
+    }
+  };
+}
+
+function streamingEngineInfo(): RunResponse["engine"] {
+  return (
+    state.health?.engine ?? {
+      mode: "loading",
+      model: "Qwen/Qwen3-1.7B",
+      layer: 15,
+      device: "Modal GPU",
+      readout: "hidden-state",
+      jacobian_lens: null
+    }
+  );
+}
+
+async function streamRun(payload: RunRequestPayload, signal: AbortSignal) {
+  const response = await fetch(`${API_BASE}/api/run/stream`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload),
+    signal
+  });
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(body || `HTTP ${response.status}`);
+  }
+  if (!response.body) {
+    throw new Error("Streaming is not available in this browser.");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      handleRunStreamLine(line);
+    }
+  }
+  buffer += decoder.decode();
+  if (buffer.trim()) {
+    handleRunStreamLine(buffer);
+  }
+}
+
+function handleRunStreamLine(line: string) {
+  const trimmed = line.trim();
+  if (!trimmed) return;
+  const event = JSON.parse(trimmed) as RunStreamEvent;
+  if (event.type === "error") {
+    throw new Error(event.message ?? "Run failed");
+  }
+  handleRunStreamEvent(event);
+}
+
+function handleRunStreamEvent(event: RunStreamEvent) {
+  if (event.type === "start" && event.response) {
+    state.result = event.response;
+    state.health = { ok: true, engine: event.response.engine };
+    state.replayCount = event.response.frames.length;
+    state.inspectedStep = null;
+    render();
+    return;
+  }
+
+  if (event.type === "frame" && event.frame) {
+    const result = state.result ?? createStreamingRun(currentRunPayload());
+    state.result = result;
+    upsertFrame(result.frames, event.frame);
+    updateStreamingResultFromFrame(result, event.frame);
+    state.replayCount = result.frames.length;
+    state.inspectedStep = event.frame.step;
+    render();
+    return;
+  }
+
+  if (event.type === "baseline_frame" && event.frame) {
+    const result = state.result ?? createStreamingRun(currentRunPayload());
+    state.result = result;
+    upsertFrame(result.baseline_frames, event.frame);
+    result.baseline_output = event.frame.generated_text || result.baseline_output;
+    render();
+    return;
+  }
+
+  if (event.type === "done" && event.response) {
+    state.result = event.response;
+    state.health = { ok: true, engine: event.response.engine };
+    state.replayCount = event.response.frames.length;
+    state.inspectedStep = null;
+    stopReplay();
+    render();
+  }
+}
+
+function upsertFrame(frames: TraceFrame[], nextFrame: TraceFrame) {
+  const existingIndex = frames.findIndex((frame) => frame.step === nextFrame.step && frame.phase === nextFrame.phase);
+  if (existingIndex >= 0) {
+    frames[existingIndex] = nextFrame;
+  } else {
+    frames.push(nextFrame);
+  }
+}
+
+function updateStreamingResultFromFrame(result: RunResponse, frame: TraceFrame) {
+  if (frame.generated_text) {
+    result.output = frame.generated_text;
+  }
+  result.metrics.completion_tokens = result.frames.filter((item) => item.phase === "decode").length;
+  result.metrics.peak_score = Math.max(result.metrics.peak_score, framePeak(frame));
+  result.metrics.rewrites = result.frames.filter((item) => item.action === "rewrite").length;
+  if (frame.action === "blocked") {
+    const top = frame.top_concepts[0];
+    result.status = "blocked";
+    result.summary = top
+      ? `Run killed during decode: ${top.label} reached ${top.score.toFixed(2)} at step ${frame.step}.`
+      : "Run killed during decode.";
+    return;
+  }
+  if (result.status !== "cancelled" && result.status !== "error") {
+    result.status = "running";
+    result.summary = `${result.metrics.completion_tokens} streamed token states received.`;
+  }
+}
+
+function markRunCancelled() {
+  if (state.result && state.result.status === "running") {
+    state.result.status = "cancelled";
+    state.result.summary = `Run cancelled after ${state.result.frames.length} streamed token states.`;
+  }
+}
+
+function framePeak(frame: TraceFrame): number {
+  return Math.max(0, ...frame.top_concepts.map((concept) => concept.score));
+}
+
+function isAbortError(error: unknown): boolean {
+  return (
+    error instanceof Error && error.name === "AbortError"
+  ) || (typeof error === "object" && error !== null && "name" in error && error.name === "AbortError");
 }
 
 function splitKeywords(value: string): string[] {

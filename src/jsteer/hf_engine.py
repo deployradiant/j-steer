@@ -4,10 +4,12 @@ import os
 import random
 import time
 import uuid
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
 
 from .concepts import CONCEPTS, REWRITE_PROFILES, ConceptSpec, RewriteProfile
+from .lookups import lookup_jspace_injections
 from .schemas import (
     ConceptPolarity,
     ConceptScore,
@@ -18,6 +20,7 @@ from .schemas import (
     EngineInfo,
     Intervention,
     JacobianLensInfo,
+    JSpaceInjection,
     LayerActivation,
     RunMetrics,
     RunRequest,
@@ -107,11 +110,42 @@ class HFJSpaceEngine:
         response.metrics.latency_ms = int((time.perf_counter() - started) * 1000)
         return response
 
+    def stream_run(self, request: RunRequest) -> Iterator[dict[str, Any]]:
+        self._ensure_loaded()
+        started = time.perf_counter()
+        run_id = str(uuid.uuid4())
+        yield {"type": "start", "response": self._running_response(run_id, request)}
+        if request.mode == "rewrite":
+            yield from self._stream_rewrite(request, run_id, started)
+        else:
+            yield from self._stream_monitor(request, run_id, started)
+
+    def _running_response(self, run_id: str, request: RunRequest) -> RunResponse:
+        return RunResponse(
+            id=run_id,
+            status="running",
+            mode=request.mode,
+            prompt=request.prompt,
+            output="",
+            baseline_output=None,
+            summary="Run streaming token readouts from the active decoder.",
+            engine=self.info(),
+            frames=[],
+            baseline_frames=[],
+            interventions=[],
+            metrics=RunMetrics(),
+        )
+
     def custom_lens(self, request: CustomLensRequest) -> CustomLensResponse:
         self._ensure_loaded()
         assert self.model is not None and self.tokenizer is not None
         started = time.perf_counter()
-        custom_bank = self._build_custom_lens_bank(request.concepts)
+        injections = lookup_jspace_injections(
+            request.prompt,
+            target="custom_lens",
+            custom_concepts=request.concepts,
+        )
+        custom_bank = self._build_custom_lens_bank(request.concepts, injections)
         input_ids = self._encode_chat(request.prompt)
         outputs = self._forward(input_ids, output_hidden_states=True)
         hidden_states = outputs.hidden_states[self.layer + 1][0]
@@ -138,7 +172,7 @@ class HFJSpaceEngine:
                 prompt_window=min(4, tail_count),
             ),
             action="observe",
-            note="User-defined concept lens scored in raw residual space and Jacobian-transported J-space.",
+            note=self._custom_lens_note(injections),
         )
         score_by_id = {score.id: score.score for score in proxy_scores}
         jacobian_by_id = {score.id: score.score for score in jacobian_scores}
@@ -158,10 +192,11 @@ class HFJSpaceEngine:
         return CustomLensResponse(
             id=str(uuid.uuid4()),
             prompt=request.prompt,
-            summary=self._custom_lens_summary(top_proxy, top_jacobian, alignment, len(custom_bank)),
+            summary=self._custom_lens_summary(top_proxy, top_jacobian, alignment, len(custom_bank), len(injections)),
             engine=self.info(),
             frame=frame,
             concepts=concepts,
+            jspace_injections=injections,
             metrics=RunMetrics(
                 latency_ms=int((time.perf_counter() - started) * 1000),
                 prompt_tokens=int(input_ids.shape[-1]),
@@ -431,9 +466,139 @@ class HFJSpaceEngine:
             ),
         )
 
+    def _stream_monitor(
+        self,
+        request: RunRequest,
+        run_id: str,
+        started: float,
+    ) -> Iterator[dict[str, Any]]:
+        assert self.model is not None and self.tokenizer is not None
+        monitor_ids = request.monitor_ids or [
+            "credential_exfiltration",
+            "harassment",
+            "sexual_content",
+            "unsupported_claim",
+        ]
+        input_ids = self._encode_chat(request.prompt)
+        outputs = self._forward(input_ids, output_hidden_states=True)
+        prompt_hidden_states = outputs.hidden_states[self.layer + 1][0]
+        prompt_scores, prompt_proxy, prompt_jacobian, prompt_jacobian_tokens = self._score_prompt_readouts(
+            prompt_hidden_states,
+            monitor_ids,
+        )
+        peak_score = max((score.score for score in prompt_scores), default=0.0)
+        prompt_frame = TraceFrame(
+            step=0,
+            phase="prompt",
+            layer=self.layer,
+            token="<prompt>",
+            top_concepts=prompt_scores,
+            proxy_concepts=prompt_proxy,
+            jacobian_concepts=prompt_jacobian,
+            jacobian_tokens=prompt_jacobian_tokens,
+            layer_activations=self._layer_activation_scan(
+                outputs.hidden_states,
+                monitor_ids,
+                prompt_window=min(4, int(prompt_hidden_states.shape[0])),
+            ),
+            action="observe",
+            note="Prompt boundary hidden state before the first decoded token.",
+        )
+        frames = [prompt_frame]
+
+        if request.action == "kill" and peak_score >= request.threshold:
+            top = prompt_scores[0]
+            prompt_frame.action = "blocked"
+            prompt_frame.note = "Tripwire crossed before decoding."
+            yield {"type": "frame", "frame": prompt_frame}
+            yield {
+                "type": "done",
+                "response": RunResponse(
+                    id=run_id,
+                    status="blocked",
+                    mode="monitor",
+                    prompt=request.prompt,
+                    output="",
+                    summary=f"Run killed before output: {top.label} scored {top.score:.2f}.",
+                    engine=self.info(),
+                    frames=frames,
+                    metrics=RunMetrics(
+                        latency_ms=int((time.perf_counter() - started) * 1000),
+                        prompt_tokens=int(input_ids.shape[-1]),
+                        completion_tokens=0,
+                        peak_score=peak_score,
+                    ),
+                ),
+            }
+            return
+
+        yield {"type": "frame", "frame": prompt_frame}
+
+        text = ""
+        for frame in self._iter_generate(
+            input_ids=input_ids,
+            request=request,
+            monitor_ids=monitor_ids,
+            steering=None,
+        ):
+            if request.action == "kill" and self._frame_peak(frame) >= request.threshold:
+                frame.action = "blocked"
+                frame.note = "Tripwire crossed during hidden-state decode monitoring."
+                frames.append(frame)
+                yield {"type": "frame", "frame": frame}
+                top = frame.top_concepts[0]
+                yield {
+                    "type": "done",
+                    "response": RunResponse(
+                        id=run_id,
+                        status="blocked",
+                        mode="monitor",
+                        prompt=request.prompt,
+                        output="",
+                        summary=f"Run killed during decode: {top.label} reached {top.score:.2f} at step {frame.step}.",
+                        engine=self.info(),
+                        frames=frames,
+                        metrics=RunMetrics(
+                            latency_ms=int((time.perf_counter() - started) * 1000),
+                            prompt_tokens=int(input_ids.shape[-1]),
+                            completion_tokens=0,
+                            peak_score=max(self._frame_peak(item) for item in frames),
+                        ),
+                    ),
+                }
+                return
+            frames.append(frame)
+            text = frame.generated_text
+            yield {"type": "frame", "frame": frame}
+
+        yield {
+            "type": "done",
+            "response": RunResponse(
+                id=run_id,
+                status="completed",
+                mode="monitor",
+                prompt=request.prompt,
+                output=text,
+                summary="Run completed with J-space proxy monitoring enabled.",
+                engine=self.info(),
+                frames=frames,
+                metrics=RunMetrics(
+                    latency_ms=int((time.perf_counter() - started) * 1000),
+                    prompt_tokens=int(input_ids.shape[-1]),
+                    completion_tokens=len(self.tokenizer.encode(text, add_special_tokens=False)),
+                    peak_score=max(self._frame_peak(frame) for frame in frames),
+                ),
+            ),
+        }
+
     def _run_rewrite(self, request: RunRequest) -> RunResponse:
         assert self.model is not None and self.tokenizer is not None
         profile = REWRITE_PROFILES.get(request.rewrite_profile_id or "", REWRITE_PROFILES["brand_canon_injection"])
+        injections = lookup_jspace_injections(
+            request.prompt,
+            target="rewrite_controller",
+            default_targets=[CONCEPTS[profile.target_concept].label],
+        )
         input_ids = self._encode_chat(request.prompt)
         monitor_ids = list(profile.suppress_concepts) + [profile.target_concept]
 
@@ -447,7 +612,7 @@ class HFJSpaceEngine:
                 steering=None,
             )
 
-        steering = self._steering_state(profile, request)
+        steering = self._steering_state(profile, request, injections)
         steered_text, frames = self._generate(
             input_ids=input_ids,
             request=request,
@@ -469,6 +634,7 @@ class HFJSpaceEngine:
             frames=frames,
             baseline_frames=baseline_frames,
             interventions=interventions,
+            jspace_injections=injections,
             metrics=RunMetrics(
                 prompt_tokens=int(input_ids.shape[-1]),
                 completion_tokens=len(self.tokenizer.encode(steered_text, add_special_tokens=False)),
@@ -477,6 +643,75 @@ class HFJSpaceEngine:
             ),
         )
 
+    def _stream_rewrite(
+        self,
+        request: RunRequest,
+        run_id: str,
+        started: float,
+    ) -> Iterator[dict[str, Any]]:
+        assert self.model is not None and self.tokenizer is not None
+        profile = REWRITE_PROFILES.get(request.rewrite_profile_id or "", REWRITE_PROFILES["brand_canon_injection"])
+        injections = lookup_jspace_injections(
+            request.prompt,
+            target="rewrite_controller",
+            default_targets=[CONCEPTS[profile.target_concept].label],
+        )
+        input_ids = self._encode_chat(request.prompt)
+        monitor_ids = list(profile.suppress_concepts) + [profile.target_concept]
+
+        baseline_text = None
+        baseline_frames: list[TraceFrame] = []
+        if request.compare_baseline:
+            for frame in self._iter_generate(
+                input_ids=input_ids,
+                request=request,
+                monitor_ids=monitor_ids,
+                steering=None,
+            ):
+                baseline_frames.append(frame)
+                baseline_text = frame.generated_text
+                yield {"type": "baseline_frame", "frame": frame}
+
+        steering = self._steering_state(profile, request, injections)
+        frames: list[TraceFrame] = []
+        steered_text = ""
+        for frame in self._iter_generate(
+            input_ids=input_ids,
+            request=request,
+            monitor_ids=monitor_ids,
+            steering=steering,
+        ):
+            frames.append(frame)
+            steered_text = frame.generated_text
+            yield {"type": "frame", "frame": frame}
+
+        interventions = steering["interventions"]
+        peak = max((self._frame_peak(frame) for frame in frames), default=0.0)
+        yield {
+            "type": "done",
+            "response": RunResponse(
+                id=run_id,
+                status="rewritten",
+                mode="rewrite",
+                prompt=request.prompt,
+                output=steered_text,
+                baseline_output=baseline_text,
+                summary=f"{len(interventions)} forward-hook rewrites applied at layer {self.layer}.",
+                engine=self.info(),
+                frames=frames,
+                baseline_frames=baseline_frames,
+                interventions=interventions,
+                jspace_injections=injections,
+                metrics=RunMetrics(
+                    latency_ms=int((time.perf_counter() - started) * 1000),
+                    prompt_tokens=int(input_ids.shape[-1]),
+                    completion_tokens=len(self.tokenizer.encode(steered_text, add_special_tokens=False)),
+                    peak_score=peak,
+                    rewrites=len(interventions),
+                ),
+            ),
+        }
+
     def _generate(
         self,
         input_ids: Any,
@@ -484,9 +719,26 @@ class HFJSpaceEngine:
         monitor_ids: list[str],
         steering: dict[str, Any] | None,
     ) -> tuple[str, list[TraceFrame]]:
+        frames = list(
+            self._iter_generate(
+                input_ids=input_ids,
+                request=request,
+                monitor_ids=monitor_ids,
+                steering=steering,
+            )
+        )
+        text = frames[-1].generated_text.strip() if frames else ""
+        return text, frames
+
+    def _iter_generate(
+        self,
+        input_ids: Any,
+        request: RunRequest,
+        monitor_ids: list[str],
+        steering: dict[str, Any] | None,
+    ) -> Iterator[TraceFrame]:
         assert self.model is not None and self.tokenizer is not None and self.torch is not None
         torch = self.torch
-        frames: list[TraceFrame] = []
         handle = None
         state = steering
         if state is not None:
@@ -521,25 +773,23 @@ class HFJSpaceEngine:
                 generated_ids.append(token_id)
                 generated_text = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
                 action = "rewrite" if state and state.pop("last_rewrite", False) else "observe"
-                frames.append(
-                    TraceFrame(
-                        step=step + 1,
-                        phase="decode",
-                        layer=self.layer,
-                        token=self.tokenizer.decode([token_id], skip_special_tokens=True),
-                        generated_text=generated_text,
-                        top_concepts=scores,
-                        proxy_concepts=proxy_scores,
-                        jacobian_concepts=jacobian_scores,
-                        jacobian_tokens=jacobian_tokens,
-                        layer_activations=self._layer_activation_scan(outputs.hidden_states, monitor_ids),
-                        action=action,
-                        note=(
-                            "Forward hook edited hidden state; decoder readout favored approved terms."
-                            if action == "rewrite"
-                            else None
-                        ),
-                    )
+                yield TraceFrame(
+                    step=step + 1,
+                    phase="decode",
+                    layer=self.layer,
+                    token=self.tokenizer.decode([token_id], skip_special_tokens=True),
+                    generated_text=generated_text,
+                    top_concepts=scores,
+                    proxy_concepts=proxy_scores,
+                    jacobian_concepts=jacobian_scores,
+                    jacobian_tokens=jacobian_tokens,
+                    layer_activations=self._layer_activation_scan(outputs.hidden_states, monitor_ids),
+                    action=action,
+                    note=(
+                        "Forward hook edited hidden state; decoder readout favored approved terms."
+                        if action == "rewrite"
+                        else None
+                    ),
                 )
                 if state is not None and self._control_phrase_complete(state, generated_ids, generated_text):
                     break
@@ -555,22 +805,30 @@ class HFJSpaceEngine:
                     ],
                     dim=-1,
                 )
-            return self.tokenizer.decode(generated_ids, skip_special_tokens=True).strip(), frames
         finally:
             if handle is not None:
                 handle.remove()
 
-    def _steering_state(self, profile: RewriteProfile, request: RunRequest) -> dict[str, Any]:
+    def _steering_state(
+        self,
+        profile: RewriteProfile,
+        request: RunRequest,
+        lookup_injections: list[JSpaceInjection] | None = None,
+    ) -> dict[str, Any]:
         assert self.bank is not None and self.tokenizer is not None
         torch = self.torch
         target = self.bank.directions[profile.target_concept]
         suppressors = [self.bank.directions[concept_id] for concept_id in profile.suppress_concepts]
         suppress = torch.stack(suppressors).mean(dim=0) if suppressors else torch.zeros_like(target)
         delta = request.strength * target - (request.strength * 0.7) * suppress
+        injection_delta = self._lookup_injection_direction(lookup_injections or [])
+        if injection_delta is not None:
+            delta = delta + min(request.strength, 4.0) * injection_delta.to(delta.device)
         phrase_sequences = self._control_phrase_sequences(profile)
         return {
             "profile": profile,
             "delta": delta,
+            "lookup_injections": lookup_injections or [],
             "phrase_sequences": phrase_sequences,
             "phrase_bias": max(0.0, 4.0 + request.strength * 2.2),
             "force_control_phrase": True,
@@ -597,6 +855,7 @@ class HFJSpaceEngine:
         edited[:, -1, :] = edited[:, -1, :] + delta
         profile: RewriteProfile = state["profile"]
         suppress_label = ", ".join(CONCEPTS[concept_id].label for concept_id in profile.suppress_concepts)
+        lookup_injections: list[JSpaceInjection] = state.get("lookup_injections", [])
         state["interventions"].append(
             Intervention(
                 step=max(0, state["step"] - 1),
@@ -606,6 +865,11 @@ class HFJSpaceEngine:
                 reason=(
                     "Forward hook added target activation, subtracted suppressor activation, "
                     "and constrained the decoder readout to the approved control phrase."
+                    + (
+                        " Keyword lookup context was projected directly into the J-space steering delta."
+                        if lookup_injections
+                        else ""
+                    )
                 ),
             )
         )
@@ -725,7 +989,11 @@ class HFJSpaceEngine:
         hidden = outputs.hidden_states[self.layer + 1][0, -4:, :].mean(dim=0).detach()
         return hidden.float()
 
-    def _build_custom_lens_bank(self, concepts: list[CustomConceptInput]) -> list[_CustomConceptVector]:
+    def _build_custom_lens_bank(
+        self,
+        concepts: list[CustomConceptInput],
+        lookup_injections: list[JSpaceInjection] | None = None,
+    ) -> list[_CustomConceptVector]:
         assert self.torch is not None
         baseline = self._activation_for_text("Neutral enterprise assistant text with no user-defined concept.")
         jacobian_baseline = self._transport_jacobian_residual(baseline) if self.jacobian_lens is not None else None
@@ -735,7 +1003,7 @@ class HFJSpaceEngine:
             keywords = self._clean_custom_keywords(concept.keywords)
             if not keywords:
                 raise ValueError(f"Custom concept {label!r} needs at least one non-empty keyword.")
-            calibration_prompts = self._custom_calibration_prompts(label, keywords)
+            calibration_prompts = self._custom_calibration_prompts(label, keywords, lookup_injections)
             activations = [self._activation_for_text(prompt) for prompt in calibration_prompts]
             mean_activation = self.torch.stack(activations).mean(dim=0)
             proxy_direction = mean_activation - baseline
@@ -782,13 +1050,45 @@ class HFJSpaceEngine:
         return cleaned[:12]
 
     @staticmethod
-    def _custom_calibration_prompts(label: str, keywords: list[str]) -> list[str]:
+    def _custom_calibration_prompts(
+        label: str,
+        keywords: list[str],
+        lookup_injections: list[JSpaceInjection] | None = None,
+    ) -> list[str]:
         joined = ", ".join(keywords)
-        return [
+        prompts = [
             f"The hidden concept is {label}. Related terms: {joined}.",
             f"The assistant is thinking about {label}: {joined}.",
             f"A model trajectory focused on {label}, especially {joined}.",
         ]
+        prompts.extend(
+            injection.injected_text
+            for injection in lookup_injections or []
+            if HFJSpaceEngine._injection_targets_custom_concept(injection, label, keywords)
+        )
+        return prompts
+
+    def _lookup_injection_direction(self, lookup_injections: list[JSpaceInjection]) -> Any | None:
+        if not lookup_injections:
+            return None
+        assert self.torch is not None
+        baseline = self._activation_for_text("Neutral enterprise assistant text with no retrieved lookup context.")
+        activations = [self._activation_for_text(injection.injected_text) for injection in lookup_injections[:3]]
+        mean_activation = self.torch.stack(activations).mean(dim=0)
+        direction = mean_activation - baseline
+        return direction / (direction.norm() + 1e-6)
+
+    @staticmethod
+    def _injection_targets_custom_concept(
+        injection: JSpaceInjection,
+        label: str,
+        keywords: list[str],
+    ) -> bool:
+        targets = {target.casefold() for target in injection.concept_targets}
+        if label.strip().casefold() in targets:
+            return True
+        lookup_text = f"{injection.keyword} {injection.title} {injection.summary}".casefold()
+        return any(keyword.strip().casefold() in lookup_text for keyword in keywords if keyword.strip())
 
     def _score_custom_proxy_sequence(
         self,
@@ -895,14 +1195,35 @@ class HFJSpaceEngine:
         top_jacobian: ConceptScore | None,
         alignment: str,
         concept_count: int,
+        injection_count: int = 0,
     ) -> str:
+        injection_clause = (
+            f" {injection_count} keyword lookup{'s' if injection_count != 1 else ''} injected into J-space calibration."
+            if injection_count
+            else ""
+        )
         if top_proxy is None:
-            return f"Generated {concept_count} custom concept directions; no prompt activation was scored."
+            return (
+                f"Generated {concept_count} custom concept directions; no prompt activation was scored."
+                f"{injection_clause}"
+            )
         if top_jacobian is None:
-            return f"Generated {concept_count} custom concept directions; proxy lens top concept is {top_proxy.label}."
+            return (
+                f"Generated {concept_count} custom concept directions; proxy lens top concept is "
+                f"{top_proxy.label}.{injection_clause}"
+            )
         return (
             f"Generated {concept_count} custom concept directions; proxy top is {top_proxy.label}, "
-            f"Jacobian top is {top_jacobian.label}, and the comparison {alignment}."
+            f"Jacobian top is {top_jacobian.label}, and the comparison {alignment}.{injection_clause}"
+        )
+
+    @staticmethod
+    def _custom_lens_note(injections: list[JSpaceInjection]) -> str:
+        if not injections:
+            return "User-defined concept lens scored in raw residual space and Jacobian-transported J-space."
+        return (
+            "Keyword lookup pulled additional context and injected it into the custom concept "
+            "calibration path before raw residual and Jacobian-transported scoring."
         )
 
     def _score_readouts(

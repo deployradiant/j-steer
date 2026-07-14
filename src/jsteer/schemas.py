@@ -6,9 +6,10 @@ from pydantic import BaseModel, Field
 
 RunMode = Literal["monitor", "rewrite"]
 MonitorAction = Literal["observe", "kill"]
-RunStatus = Literal["completed", "blocked", "rewritten", "error"]
+RunStatus = Literal["running", "completed", "blocked", "rewritten", "cancelled", "error"]
 FrameAction = Literal["observe", "blocked", "rewrite"]
 ConceptPolarity = Literal["risk", "target", "neutral"]
+InjectionTarget = Literal["custom_lens", "rewrite_controller"]
 
 
 class ConceptScore(BaseModel):
@@ -61,6 +62,17 @@ class Intervention(BaseModel):
     reason: str
 
 
+class JSpaceInjection(BaseModel):
+    id: str
+    keyword: str
+    title: str
+    source: str
+    summary: str
+    injected_text: str
+    concept_targets: list[str] = Field(default_factory=list)
+    target: InjectionTarget
+
+
 class EngineInfo(BaseModel):
     mode: str
     model: str
@@ -105,6 +117,7 @@ class RunResponse(BaseModel):
     frames: list[TraceFrame] = Field(default_factory=list)
     baseline_frames: list[TraceFrame] = Field(default_factory=list)
     interventions: list[Intervention] = Field(default_factory=list)
+    jspace_injections: list[JSpaceInjection] = Field(default_factory=list)
     metrics: RunMetrics = Field(default_factory=RunMetrics)
 
 
@@ -138,6 +151,7 @@ class CustomLensResponse(BaseModel):
     engine: EngineInfo
     frame: TraceFrame
     concepts: list[CustomConceptLens] = Field(default_factory=list)
+    jspace_injections: list[JSpaceInjection] = Field(default_factory=list)
     metrics: RunMetrics = Field(default_factory=RunMetrics)
 
 

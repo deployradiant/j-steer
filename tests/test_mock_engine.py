@@ -25,7 +25,7 @@ def test_rewrite_has_baseline_and_interventions() -> None:
     response = engine.run(
         RunRequest(
             mode="rewrite",
-            prompt="Write product copy and mention competitors if useful.",
+            prompt="Write product copy for SOC 2 buyers and mention competitors if useful.",
             rewrite_profile_id="brand_canon_injection",
         )
     )
@@ -33,5 +33,6 @@ def test_rewrite_has_baseline_and_interventions() -> None:
     assert response.status == "rewritten"
     assert response.baseline_output
     assert response.interventions
+    assert response.jspace_injections
     assert response.frames[0].layer_activations
     assert "HeliosCRM" in response.output
