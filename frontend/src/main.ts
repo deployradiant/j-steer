@@ -277,7 +277,7 @@ function render() {
         <div class="mx-auto flex max-w-[1500px] px-4 py-4 sm:px-6">
           <div class="radiant-brand flex min-w-0 items-center gap-3">
             <div class="radiant-logo-mark flex h-12 w-12 shrink-0 items-center justify-center">
-              <img src="/radiant-mark.svg" alt="Radiant" class="h-9 w-9" />
+              <img src="/radiant-mark.png" alt="Radiant" class="h-9 w-9" />
             </div>
             <div class="min-w-0">
               <h1 class="text-2xl font-semibold tracking-normal">J-Steer</h1>
