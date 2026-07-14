@@ -1,7 +1,7 @@
 import "./styles.css";
 import {
   Activity,
-  Database,
+  ChevronDown,
   GripVertical,
   LoaderCircle,
   OctagonX,
@@ -13,8 +13,6 @@ import {
   Route,
   RouteOff,
   ScanEye,
-  ScissorsLineDashed,
-  Server,
   ShieldAlert,
   WandSparkles,
   createIcons
@@ -224,6 +222,7 @@ interface State {
   replayCount: number;
   inspectedStep: number | null;
   modeRailCollapsed: boolean;
+  collapsedRailSections: Set<string>;
   modelRailWidth: number;
   loading: boolean;
   cancelRequested: boolean;
@@ -271,6 +270,7 @@ const state: State = {
   replayCount: 999,
   inspectedStep: null,
   modeRailCollapsed: false,
+  collapsedRailSections: new Set(),
   modelRailWidth: 360,
   loading: false,
   cancelRequested: false,
@@ -365,7 +365,7 @@ function render() {
   createIcons({
     icons: {
       Activity,
-      Database,
+      ChevronDown,
       GripVertical,
       LoaderCircle,
       OctagonX,
@@ -377,8 +377,6 @@ function render() {
       Route,
       RouteOff,
       ScanEye,
-      ScissorsLineDashed,
-      Server,
       ShieldAlert,
       WandSparkles
     }
@@ -581,20 +579,38 @@ function renderModelStateRail(): string {
   `;
 }
 
+function renderRailSection(id: string, title: string, body: string, meta = ""): string {
+  const collapsed = state.collapsedRailSections.has(id);
+  return `
+    <section class="rail-section ${collapsed ? "is-collapsed" : ""}">
+      <button
+        type="button"
+        class="rail-section-header"
+        data-rail-section-toggle="${escapeHtml(id)}"
+        aria-expanded="${String(!collapsed)}"
+        aria-label="${collapsed ? "Expand" : "Collapse"} ${escapeHtml(title)}"
+      >
+        <span class="text-sm font-semibold">${escapeHtml(title)}</span>
+        <span class="flex min-w-0 items-center gap-2">
+          ${meta ? `<span class="truncate text-[11px] font-semibold text-neutral-500">${escapeHtml(meta)}</span>` : ""}
+          <i data-lucide="chevron-down" class="rail-section-chevron h-4 w-4 shrink-0"></i>
+        </span>
+      </button>
+      ${collapsed ? "" : `<div class="rail-section-body">${body}</div>`}
+    </section>
+  `;
+}
+
 function renderModelStatePanel(): string {
   const engine = state.health?.engine ?? state.result?.engine ?? state.customResult?.engine;
   const lens = engine?.jacobian_lens;
   const runtime = engine?.mode === "hf" ? "Modal/Qwen" : (engine?.mode ?? "Loading");
   const lensSource = lens?.source ? `${lens.source}${lens.artifact ? ` / ${lens.artifact}` : ""}` : "Pending";
-  return `
-    <section class="rail-section">
-      <div class="rail-section-header">
-        <h3 class="flex items-center gap-2 text-sm font-semibold">
-          <i data-lucide="server" class="h-4 w-4"></i>
-          Model State
-        </h3>
-      </div>
-      <div class="text-xs">
+  return renderRailSection(
+    "model-state",
+    "Model State",
+    `
+      <div class="model-state-values text-xs">
         ${stateValueRow("Runtime", runtime)}
         ${stateValueRow("Model", engine?.model ?? "Qwen/Qwen3-1.7B")}
         ${stateValueRow("Readout", engine?.readout ?? "hidden-state")}
@@ -605,8 +621,8 @@ function renderModelStatePanel(): string {
         ${stateValueRow("Device", engine?.device ?? "Modal GPU")}
         ${stateValueRow("Policy", policyLabel(), true)}
       </div>
-    </section>
-  `;
+    `
+  );
 }
 
 function stateValueRow(label: string, value: string, emphasize = false): string {
@@ -619,11 +635,10 @@ function stateValueRow(label: string, value: string, emphasize = false): string 
 }
 
 function renderModelStateEmpty(): string {
-  return `
-    <section class="rail-section">
-      <div class="rail-section-header">
-        <h3 class="text-sm font-semibold">Live Readout</h3>
-      </div>
+  return renderRailSection(
+    "live-readout",
+    "Live Readout",
+    `
       <div class="p-3">
         <div class="grid items-center gap-1 text-xs text-neutral-500" style="grid-template-columns: 38px repeat(3, minmax(0, 1fr)) 50px;">
           <span>step</span><span>risk</span><span>claim</span><span>brand</span><span>action</span>
@@ -640,22 +655,15 @@ function renderModelStateEmpty(): string {
             .join("")}
         </div>
       </div>
-    </section>
-  `;
+    `
+  );
 }
 
 function renderJSpaceInjectionPanel(injections: JSpaceInjection[]): string {
-  return `
-    <section class="rail-section">
-      <div class="rail-section-header">
-        <div class="flex items-center justify-between gap-3">
-          <h3 class="flex items-center gap-2 text-sm font-semibold">
-            <i data-lucide="database" class="h-4 w-4"></i>
-            Lookup Injection
-          </h3>
-          <span class="text-[11px] font-semibold text-neutral-500">${injections.length}</span>
-        </div>
-      </div>
+  return renderRailSection(
+    "lookup-injection",
+    "Lookup Injection",
+    `
       <div class="divide-y divide-line">
         ${
           injections.length
@@ -663,8 +671,9 @@ function renderJSpaceInjectionPanel(injections: JSpaceInjection[]): string {
             : `<div class="p-3 text-xs leading-5 text-neutral-500">No keyword lookup fired.</div>`
         }
       </div>
-    </section>
-  `;
+    `,
+    String(injections.length)
+  );
 }
 
 function renderJSpaceInjection(injection: JSpaceInjection): string {
@@ -1286,24 +1295,18 @@ function renderHeatmapCell(
 
 function renderTokenInspector(frame: TraceFrame | null, response: { engine: RunResponse["engine"] }): string {
   if (!frame) {
-    return `
-      <section class="rail-section">
-        <div class="rail-section-header">
-          <div class="text-sm font-semibold">Token Inspector</div>
-        </div>
-      </section>
-    `;
+    return renderRailSection(
+      "token-inspector",
+      "Token Inspector",
+      `<p class="p-3 text-xs leading-5 text-neutral-500">Select a generated token to inspect its layer activations.</p>`
+    );
   }
   const strongest = [...(frame.layer_activations ?? [])].sort((left, right) => right.score - left.score).slice(0, 6);
   const tripwires = strongest.filter(isTripwireActivation);
-  return `
-    <section class="rail-section">
-      <div class="rail-section-header">
-        <div class="flex items-center justify-between gap-3">
-          <h3 class="text-sm font-semibold">Token Inspector</h3>
-          <span class="font-mono text-xs ${actionTextClass(frame.action)}">${escapeHtml(frame.action)}</span>
-        </div>
-      </div>
+  return renderRailSection(
+    "token-inspector",
+    "Token Inspector",
+    `
       <div>
         <div class="border-b border-line p-3">
           <div class="mb-1 flex items-center justify-between gap-3">
@@ -1326,8 +1329,9 @@ function renderTokenInspector(frame: TraceFrame | null, response: { engine: RunR
           ${strongest.length ? strongest.map(renderLayerActivationRow).join("") : `<div class="p-3 text-xs text-neutral-500">No layer scan.</div>`}
         </div>
       </div>
-    </section>
-  `;
+    `,
+    frame.action
+  );
 }
 
 function renderLayerActivationRow(activation: LayerActivation): string {
@@ -1366,34 +1370,19 @@ function cellColor(score: Pick<LayerActivation | ConceptScore, "polarity">): str
   return "rgba(215,221,255,0.72)";
 }
 
-function actionTextClass(action: TraceFrame["action"]): string {
-  if (action === "blocked") return "text-hazard";
-  if (action === "rewrite") return "text-violetless";
-  return "text-neutral-500";
-}
-
 function renderInterventions(response: RunResponse): string {
   if (response.interventions.length === 0) {
-    return `
-      <section class="rail-section">
-        <div class="rail-section-header">
-          <div class="flex items-center gap-2 text-sm font-semibold">
-            <i data-lucide="scissors-line-dashed" class="h-4 w-4"></i>
-            Intervention Ledger
-          </div>
-        </div>
-        <p class="p-3 text-sm text-neutral-600">No rewrites recorded.</p>
-      </section>
-    `;
+    return renderRailSection(
+      "intervention-ledger",
+      "Intervention Ledger",
+      `<p class="p-3 text-sm text-neutral-600">No rewrites recorded.</p>`,
+      "0"
+    );
   }
-  return `
-    <section class="rail-section">
-      <div class="rail-section-header">
-        <h3 class="flex items-center gap-2 text-sm font-semibold">
-          <i data-lucide="scissors-line-dashed" class="h-4 w-4"></i>
-          Intervention Ledger
-        </h3>
-      </div>
+  return renderRailSection(
+    "intervention-ledger",
+    "Intervention Ledger",
+    `
       <div class="divide-y divide-line">
         ${response.interventions
           .slice(0, 8)
@@ -1411,8 +1400,9 @@ function renderInterventions(response: RunResponse): string {
           )
           .join("")}
       </div>
-    </section>
-  `;
+    `,
+    String(response.interventions.length)
+  );
 }
 
 function renderReadoutPanel(frames: TraceFrame[]): string {
@@ -1432,24 +1422,18 @@ function renderReadoutPanel(frames: TraceFrame[]): string {
       : jacobianTop
         ? "Lens Only"
         : "Proxy Only";
-  return `
-    <section class="rail-section">
-      <div class="rail-section-header">
-        <div class="flex items-center justify-between gap-3">
-          <h3 class="flex items-center gap-2 text-sm font-semibold">
-            <i data-lucide="radio-tower" class="h-4 w-4"></i>
-            Readout Comparison
-          </h3>
-          <span class="text-[11px] font-semibold text-neutral-500">${escapeHtml(alignment)}</span>
-        </div>
-      </div>
+  return renderRailSection(
+    "readout-comparison",
+    "Readout Comparison",
+    `
       <div>
         ${renderReadoutLane("Control", controlConcepts, "bg-ink text-white")}
         ${renderReadoutLane("Proxy", proxyConcepts, "bg-field text-ink")}
         ${renderReadoutLane("Jacobian", jacobianConcepts, "bg-sky-50 text-violetless", latest?.jacobian_tokens ?? [])}
       </div>
-    </section>
-  `;
+    `,
+    alignment
+  );
 }
 
 function renderReadoutLane(title: string, concepts: ConceptScore[], titleClass: string, tokens: string[] = []): string {
@@ -1502,6 +1486,19 @@ function renderReadoutLane(title: string, concepts: ConceptScore[], titleClass: 
 }
 
 function bindEvents() {
+  document.querySelectorAll<HTMLButtonElement>("[data-rail-section-toggle]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const id = button.dataset.railSectionToggle;
+      if (!id) return;
+      if (state.collapsedRailSections.has(id)) {
+        state.collapsedRailSections.delete(id);
+      } else {
+        state.collapsedRailSections.add(id);
+      }
+      render();
+    });
+  });
+
   document.querySelector<HTMLButtonElement>("#toggle-mode-rail")?.addEventListener("click", () => {
     state.modeRailCollapsed = !state.modeRailCollapsed;
     render();
