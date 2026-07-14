@@ -1,8 +1,11 @@
 import "./styles.css";
 import {
   Activity,
+  GripVertical,
   LoaderCircle,
   OctagonX,
+  PanelLeftClose,
+  PanelLeftOpen,
   Play,
   RadioTower,
   RefreshCw,
@@ -186,6 +189,8 @@ interface State {
   customResult: CustomLensResponse | null;
   replayCount: number;
   inspectedStep: number | null;
+  modeRailCollapsed: boolean;
+  modelRailWidth: number;
   loading: boolean;
   error: string | null;
 }
@@ -229,6 +234,8 @@ const state: State = {
   customResult: null,
   replayCount: 999,
   inspectedStep: null,
+  modeRailCollapsed: false,
+  modelRailWidth: 360,
   loading: false,
   error: null
 };
@@ -287,15 +294,23 @@ function render() {
         </div>
       </header>
 
-      <section class="mx-auto grid max-w-[1500px] gap-4 px-4 py-4 sm:px-6 lg:grid-cols-[280px_minmax(0,1fr)_340px] 2xl:grid-cols-[300px_minmax(0,1fr)_390px]">
-        <aside class="min-w-0 border border-line bg-panel shadow-crisp lg:sticky lg:top-4 lg:self-start">
+      <section
+        class="workbench-grid mx-auto grid max-w-[1500px] gap-4 px-4 py-4 sm:px-6"
+        style="--mode-rail-width: ${state.modeRailCollapsed ? 72 : 280}px; --model-rail-width: ${state.modelRailWidth}px;"
+      >
+        <aside class="mode-rail min-w-0 border border-line bg-panel shadow-crisp lg:sticky lg:top-4 lg:self-start ${state.modeRailCollapsed ? "is-collapsed" : ""}">
           ${renderNavigationSidebar()}
         </aside>
         <section class="min-w-0 space-y-4">
           ${renderPromptWorkspace()}
         </section>
-        <aside class="min-w-0 lg:sticky lg:top-4 lg:max-h-[calc(100vh-112px)] lg:overflow-auto">
-          ${renderModelStateRail()}
+        <aside class="model-rail min-w-0 lg:sticky lg:top-4">
+          <button id="model-rail-resizer" class="model-rail-resizer hidden lg:flex" type="button" aria-label="Resize model state sidebar" title="Drag to resize">
+            <i data-lucide="grip-vertical" class="h-4 w-4"></i>
+          </button>
+          <div class="model-rail-scroll">
+            ${renderModelStateRail()}
+          </div>
         </aside>
       </section>
     </main>
@@ -305,8 +320,11 @@ function render() {
   createIcons({
     icons: {
       Activity,
+      GripVertical,
       LoaderCircle,
       OctagonX,
+      PanelLeftClose,
+      PanelLeftOpen,
       Play,
       RadioTower,
       RefreshCw,
@@ -363,24 +381,19 @@ function policyLabel(): string {
 }
 
 function renderNavigationSidebar(): string {
-  const profiles = state.profiles;
-  const scenarios = isRunMode(state.activeMode)
-    ? (profiles?.scenarios.filter((scenario) => scenario.mode === state.activeMode) ?? [])
-    : [];
+  const collapsed = state.modeRailCollapsed;
   return `
-    <div class="border-b border-line p-4">
-      <div class="mb-2 text-xs font-semibold uppercase tracking-normal text-neutral-500">Mode</div>
+    <div class="p-3">
+      <div class="mb-2 flex items-center justify-between gap-2">
+        <div class="mode-rail-heading text-xs font-semibold uppercase tracking-normal text-neutral-500">Mode</div>
+        <button id="toggle-mode-rail" class="flex h-8 w-8 shrink-0 items-center justify-center border border-line bg-white hover:border-ink" type="button" aria-label="${collapsed ? "Expand mode sidebar" : "Collapse mode sidebar"}">
+          <i data-lucide="${collapsed ? "panel-left-open" : "panel-left-close"}" class="h-4 w-4"></i>
+        </button>
+      </div>
       <div class="grid gap-2">
         ${tabButton("monitor", "shield-alert", "Tripwire")}
         ${tabButton("rewrite", "wand-sparkles", "Rewrite")}
         ${tabButton("custom", "radio-tower", "Custom Lens")}
-      </div>
-    </div>
-
-    <div class="p-4">
-      <div class="mb-2 text-xs font-semibold uppercase tracking-normal text-neutral-500">Scenarios</div>
-      <div class="grid gap-2">
-        ${state.activeMode === "custom" ? renderCustomScenarioButton() : scenarios.map(renderScenarioButton).join("") || skeletonLine("Loading scenarios")}
       </div>
     </div>
   `;
@@ -389,6 +402,7 @@ function renderNavigationSidebar(): string {
 function renderPromptWorkspace(): string {
   return `
     <section class="border border-line bg-panel shadow-crisp">
+      ${renderScenarioPicker()}
       <div class="border-b border-line p-4">
         <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div class="min-w-0">
@@ -408,6 +422,27 @@ function renderPromptWorkspace(): string {
     <section class="border border-line bg-panel shadow-crisp">
       ${renderResults()}
     </section>
+  `;
+}
+
+function renderScenarioPicker(): string {
+  const scenarios = isRunMode(state.activeMode)
+    ? (state.profiles?.scenarios.filter((scenario) => scenario.mode === state.activeMode) ?? [])
+    : [];
+  const body =
+    state.activeMode === "custom"
+      ? renderCustomScenarioButton()
+      : scenarios.map(renderScenarioButton).join("") || skeletonLine("Loading scenarios");
+  return `
+    <div class="border-b border-line bg-field p-4">
+      <div class="mb-2 flex items-center justify-between gap-3">
+        <div class="text-xs font-semibold uppercase tracking-normal text-neutral-500">Scenarios</div>
+        <span class="text-xs text-neutral-500">${escapeHtml(policyLabel())}</span>
+      </div>
+      <div class="scenario-grid grid gap-2">
+        ${body}
+      </div>
+    </div>
   `;
 }
 
@@ -559,18 +594,23 @@ function isRunMode(mode: AppMode): mode is RunMode {
 
 function tabButton(mode: AppMode, icon: string, label: string): string {
   const active = state.activeMode === mode;
+  const collapsed = state.modeRailCollapsed;
   const descriptions: Record<AppMode, string> = {
     monitor: "Detect and kill unsafe latent trajectories.",
     rewrite: "Apply activation edits during decoding.",
     custom: "Generate concept lenses and compare readouts."
   };
   return `
-    <button data-tab="${mode}" class="flex min-h-16 items-start gap-3 border px-3 py-3 text-left ${active ? "border-ink bg-white text-ink shadow-crisp" : "border-line bg-field text-neutral-600 hover:border-ink hover:text-ink"}">
-      <i data-lucide="${icon}" class="mt-0.5 h-4 w-4 shrink-0"></i>
-      <span class="min-w-0">
-        <span class="block text-sm font-semibold">${label}</span>
-        <span class="mt-1 block text-xs leading-4 text-neutral-600">${descriptions[mode]}</span>
-      </span>
+    <button data-tab="${mode}" class="flex border ${collapsed ? "h-11 items-center justify-center px-0" : "min-h-16 items-start gap-3 px-3 py-3 text-left"} ${active ? "border-ink bg-white text-ink shadow-crisp" : "border-line bg-field text-neutral-600 hover:border-ink hover:text-ink"}" title="${escapeHtml(label)}">
+      <i data-lucide="${icon}" class="${collapsed ? "h-4 w-4" : "mt-0.5 h-4 w-4"} shrink-0"></i>
+      ${
+        collapsed
+          ? `<span class="sr-only">${escapeHtml(label)}</span>`
+          : `<span class="min-w-0">
+              <span class="block text-sm font-semibold">${escapeHtml(label)}</span>
+              <span class="mt-1 block text-xs leading-4 text-neutral-600">${descriptions[mode]}</span>
+            </span>`
+      }
     </button>
   `;
 }
@@ -578,8 +618,9 @@ function tabButton(mode: AppMode, icon: string, label: string): string {
 function renderScenarioButton(scenario: ScenarioPublic): string {
   const active = state.prompt === scenario.prompt;
   return `
-    <button data-scenario="${scenario.id}" class="border px-3 py-2 text-left text-sm ${active ? "border-ink bg-white" : "border-line bg-field hover:border-neutral-500"}">
-      ${escapeHtml(scenario.label)}
+    <button data-scenario="${scenario.id}" class="min-h-16 border px-3 py-2 text-left text-sm ${active ? "border-ink bg-white shadow-crisp" : "border-line bg-white hover:border-neutral-500"}">
+      <span class="block font-semibold">${escapeHtml(scenario.label)}</span>
+      <span class="mt-1 block text-xs leading-4 text-neutral-600">${escapeHtml(scenario.action === "kill" ? "Tripwire threshold demo" : "Steering rewrite demo")}</span>
     </button>
   `;
 }
@@ -1330,6 +1371,12 @@ function renderReadoutLane(title: string, concepts: ConceptScore[], titleClass: 
 }
 
 function bindEvents() {
+  document.querySelector<HTMLButtonElement>("#toggle-mode-rail")?.addEventListener("click", () => {
+    state.modeRailCollapsed = !state.modeRailCollapsed;
+    render();
+  });
+  bindModelRailResize();
+
   document.querySelectorAll<HTMLButtonElement>("[data-tab]").forEach((button) => {
     button.addEventListener("click", () => {
       const nextMode = button.dataset.tab as AppMode;
@@ -1456,6 +1503,38 @@ function bindEvents() {
     element.addEventListener("focus", inspect);
     element.addEventListener("click", inspect);
   });
+}
+
+function bindModelRailResize() {
+  const handle = document.querySelector<HTMLButtonElement>("#model-rail-resizer");
+  const grid = document.querySelector<HTMLElement>(".workbench-grid");
+  if (!handle || !grid) return;
+
+  handle.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = state.modelRailWidth;
+    document.body.classList.add("is-resizing-model-rail");
+
+    const onPointerMove = (moveEvent: PointerEvent) => {
+      const nextWidth = clamp(startWidth - (moveEvent.clientX - startX), 300, 560);
+      state.modelRailWidth = nextWidth;
+      grid.style.setProperty("--model-rail-width", `${nextWidth}px`);
+    };
+
+    const onPointerUp = () => {
+      document.body.classList.remove("is-resizing-model-rail");
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+    };
+
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+  });
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
 }
 
 function bindInput(id: string, handler: (element: HTMLElement) => void) {
