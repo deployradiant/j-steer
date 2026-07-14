@@ -353,10 +353,6 @@ select {
   background-color: #ffffff;
 }
 
-.bg-black {
-  background-color: #f4f4f4;
-}
-
 .bg-ink {
   background-color: var(--primary-50);
 }

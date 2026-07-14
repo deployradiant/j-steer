@@ -90,16 +90,16 @@ export default {
           0: "var(--grey-0)"
         },
         ink: "var(--primary-50)",
-        panel: "var(--grey-0)",
-        line: "var(--primary-20)",
-        field: "#050713",
+        panel: "#ffffff",
+        line: "#d8d8d8",
+        field: "#f8f8f8",
         signal: "var(--primary-50)",
         hazard: "var(--flame-60)",
         amberline: "var(--buttercup-60)",
         violetless: "var(--primary-70)"
       },
       boxShadow: {
-        crisp: "0 12px 34px rgba(0, 0, 0, 0.28)"
+        crisp: "0 12px 34px rgba(0, 0, 0, 0.08)"
       }
     }
   },

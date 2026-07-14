@@ -324,7 +324,7 @@ function lockedClass(): string {
 
 function render() {
   app.innerHTML = `
-    <main class="radiant-shell min-h-screen bg-black text-white">
+    <main class="radiant-shell min-h-screen text-neutral-700">
       <header class="radiant-header border-b border-line bg-panel">
         <div class="mx-auto flex max-w-[1500px] px-4 py-2 sm:px-6">
           <div class="radiant-brand flex min-w-0 items-center gap-3">
