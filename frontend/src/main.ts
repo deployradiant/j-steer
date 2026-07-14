@@ -432,7 +432,7 @@ function renderNavigationSidebar(): string {
     <div>
       <div class="flex h-12 items-center justify-between gap-2 border-b border-line px-3">
         <div class="mode-rail-heading text-xs font-semibold uppercase tracking-normal text-neutral-500">Mode</div>
-        <button id="toggle-mode-rail" class="flex h-8 w-8 shrink-0 items-center justify-center hover:text-ink" type="button" aria-label="${collapsed ? "Expand mode sidebar" : "Collapse mode sidebar"}">
+        <button id="toggle-mode-rail" class="flex h-8 w-8 shrink-0 items-center justify-center text-neutral-500 hover:text-neutral-700" type="button" aria-label="${collapsed ? "Expand mode sidebar" : "Collapse mode sidebar"}">
           <i data-lucide="${collapsed ? "panel-left-open" : "panel-left-close"}" class="h-4 w-4"></i>
         </button>
       </div>
@@ -702,13 +702,21 @@ function isRunMode(mode: AppMode): mode is RunMode {
 function tabButton(mode: AppMode, icon: string, label: string): string {
   const active = state.activeMode === mode;
   const collapsed = state.modeRailCollapsed;
+  const classes = [
+    "mode-tab flex w-full border-b border-line",
+    lockedClass().trim(),
+    collapsed ? "is-collapsed h-11 items-center justify-center" : "items-start gap-2 text-left",
+    active ? "is-active" : ""
+  ]
+    .filter(Boolean)
+    .join(" ");
   const descriptions: Record<AppMode, string> = {
     monitor: "Detect and kill unsafe latent trajectories.",
     rewrite: "Apply activation edits during decoding.",
     custom: "Generate concept lenses and compare readouts."
   };
   return `
-    <button data-tab="${mode}" class="flex w-full border-b border-l-2 border-line${lockedClass()} ${collapsed ? "h-12 items-center justify-center px-0" : "min-h-20 items-start gap-3 px-3 py-3 text-left"} ${active ? "border-l-ink bg-white text-ink" : "border-l-transparent text-neutral-600 hover:bg-field hover:text-ink"}" title="${escapeHtml(label)}" ${lockedAttr()}>
+    <button data-tab="${mode}" class="${classes}" title="${escapeHtml(label)}" ${lockedAttr()}>
       <i data-lucide="${icon}" class="${collapsed ? "h-4 w-4" : "mt-0.5 h-4 w-4"} shrink-0"></i>
       ${
         collapsed

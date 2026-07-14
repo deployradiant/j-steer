@@ -166,6 +166,39 @@ select {
   clip: rect(0, 0, 0, 0);
 }
 
+.mode-tab {
+  min-height: 64px;
+  padding: 10px 14px;
+  color: #4f4f4f;
+  background: #ffffff;
+}
+
+.mode-tab:hover,
+.mode-tab:focus {
+  color: #101010;
+  background: #f8f8f8;
+  outline: 0;
+}
+
+.mode-tab.is-active {
+  color: var(--primary-50);
+  background: #ffffff;
+}
+
+.mode-tab.is-collapsed {
+  min-height: 44px;
+  padding: 0;
+}
+
+.mode-tab .text-neutral-600 {
+  color: #6f6f6f;
+}
+
+.mode-tab:hover .text-neutral-600,
+.mode-tab:focus .text-neutral-600 {
+  color: #4f4f4f;
+}
+
 .workspace-column {
   padding: 16px;
 }
