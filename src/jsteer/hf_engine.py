@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .concepts import CONCEPTS, REWRITE_PROFILES, ConceptSpec, RewriteProfile
+from .lenses import DEFAULT_LENS_ID, LENSES
 from .lookups import lookup_jspace_injections
 from .schemas import (
     ConceptPolarity,
@@ -38,6 +39,8 @@ class _VectorBank:
 
 @dataclass
 class _JacobianLensRuntime:
+    id: str
+    label: str
     lens_model: Any
     matrices: dict[int, Any]
     matrix_stack: Any
@@ -74,13 +77,19 @@ class HFJSpaceEngine:
     readout = "Anthropic Jacobian lens vocabulary-rank filter"
 
     def __init__(self) -> None:
+        self.lens_id = os.getenv("JSTEER_LENS_ID", DEFAULT_LENS_ID)
+        lens_spec = LENSES.get(self.lens_id)
+        if lens_spec is None:
+            available = ", ".join(sorted(LENSES))
+            raise ValueError(f"Unsupported JSTEER_LENS_ID={self.lens_id!r}. Available lenses: {available}.")
         self.model_name = os.getenv("JSTEER_MODEL", "Qwen/Qwen3-1.7B")
-        self.lens_source = os.getenv("JSTEER_JLENS_REPO", "neuronpedia/jacobian-lens")
+        self.lens_label = lens_spec.label
+        self.lens_source = os.getenv("JSTEER_JLENS_REPO", lens_spec.source)
         self.lens_artifact = os.getenv(
             "JSTEER_JLENS_FILE",
-            "qwen3-1.7b/jlens/Salesforce-wikitext/Qwen3-1.7B_jacobian_lens.pt",
+            lens_spec.artifact,
         )
-        self.lens_target_model = os.getenv("JSTEER_JLENS_MODEL", "Qwen/Qwen3-1.7B")
+        self.lens_target_model = os.getenv("JSTEER_JLENS_MODEL", lens_spec.target_model)
         self._loaded = False
         self.model: Any | None = None
         self.tokenizer: Any | None = None
@@ -104,6 +113,7 @@ class HFJSpaceEngine:
         )
 
     def run(self, request: RunRequest) -> RunResponse:
+        self._validate_lens_selection(request.lens_id)
         self._ensure_loaded()
         started = time.perf_counter()
         if request.mode == "rewrite":
@@ -114,6 +124,7 @@ class HFJSpaceEngine:
         return response
 
     def stream_run(self, request: RunRequest) -> Iterator[dict[str, Any]]:
+        self._validate_lens_selection(request.lens_id)
         self._ensure_loaded()
         started = time.perf_counter()
         run_id = str(uuid.uuid4())
@@ -246,6 +257,8 @@ class HFJSpaceEngine:
     def _jacobian_lens_info(self) -> JacobianLensInfo:
         if self.jacobian_lens is not None:
             return JacobianLensInfo(
+                id=self.jacobian_lens.id,
+                label=self.jacobian_lens.label,
                 available=True,
                 status="ready",
                 source=self.jacobian_lens.source,
@@ -260,6 +273,8 @@ class HFJSpaceEngine:
             )
         if self.jacobian_lens_error:
             return JacobianLensInfo(
+                id=self.lens_id,
+                label=self.lens_label,
                 available=False,
                 status="unavailable",
                 source=self.lens_source,
@@ -270,6 +285,8 @@ class HFJSpaceEngine:
                 message=self.jacobian_lens_error,
             )
         return JacobianLensInfo(
+            id=self.lens_id,
+            label=self.lens_label,
             available=False,
             status="configured",
             source=self.lens_source,
@@ -329,6 +346,8 @@ class HFJSpaceEngine:
             )
             matrices = {layer: matrix_stack[index] for index, layer in enumerate(source_layers)}
             self.jacobian_lens = _JacobianLensRuntime(
+                id=self.lens_id,
+                label=self.lens_label,
                 lens_model=lens_model,
                 matrices=matrices,
                 matrix_stack=matrix_stack,
@@ -344,6 +363,12 @@ class HFJSpaceEngine:
             self.jacobian_lens_error = None
         except Exception as exc:
             self.jacobian_lens_error = f"Unable to load Jacobian lens: {exc}"
+
+    def _validate_lens_selection(self, lens_id: str) -> None:
+        if lens_id != self.lens_id:
+            raise ValueError(
+                f"Lens {lens_id!r} is not loaded by this runtime. Select the compatible lens {self.lens_id!r}."
+            )
 
     @classmethod
     def _model_ids_match(cls, model_name: str, lens_target_model: str) -> bool:

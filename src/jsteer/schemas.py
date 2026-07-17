@@ -32,6 +32,8 @@ class LayerActivation(BaseModel):
 
 
 class JacobianLensInfo(BaseModel):
+    id: str = ""
+    label: str = ""
     available: bool = False
     status: str = "configured"
     source: str = ""
@@ -101,6 +103,7 @@ class RunRequest(BaseModel):
     action: MonitorAction = "kill"
     threshold: float = Field(default=0.66, ge=0.05, le=0.99)
     lens_rank_threshold: int = Field(default=64, ge=1, le=512)
+    lens_id: str = Field(default="anthropic-qwen3-1.7b-wikitext", min_length=1, max_length=120)
     max_new_tokens: int = Field(default=90, ge=8, le=256)
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     top_p: float = Field(default=0.9, ge=0.05, le=1.0)
@@ -190,7 +193,20 @@ class ScenarioPublic(BaseModel):
     lens_rank_threshold: int = Field(default=64, ge=1, le=512)
 
 
+class LensPublic(BaseModel):
+    id: str
+    label: str
+    description: str
+    source: str
+    artifact: str
+    target_model: str
+    dataset: str
+    fitted_layers: int = Field(ge=1)
+
+
 class ProfilesResponse(BaseModel):
     concepts: list[ConceptPublic]
     rewrite_profiles: list[RewriteProfilePublic]
     scenarios: list[ScenarioPublic]
+    lenses: list[LensPublic]
+    default_lens_id: str

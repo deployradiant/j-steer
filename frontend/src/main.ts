@@ -51,10 +51,23 @@ interface ScenarioPublic {
   lens_rank_threshold: number;
 }
 
+interface LensPublic {
+  id: string;
+  label: string;
+  description: string;
+  source: string;
+  artifact: string;
+  target_model: string;
+  dataset: string;
+  fitted_layers: number;
+}
+
 interface ProfilesResponse {
   concepts: ConceptPublic[];
   rewrite_profiles: RewriteProfilePublic[];
   scenarios: ScenarioPublic[];
+  lenses: LensPublic[];
+  default_lens_id: string;
 }
 
 interface ConceptScore {
@@ -77,6 +90,8 @@ interface LayerActivation {
 }
 
 interface JacobianLensInfo {
+  id: string;
+  label: string;
   available: boolean;
   status: string;
   source: string;
@@ -163,6 +178,7 @@ interface RunRequestPayload {
   action: MonitorAction;
   threshold: number;
   lens_rank_threshold: number;
+  lens_id: string;
   max_new_tokens: number;
   temperature: number;
   strength: number;
@@ -184,6 +200,7 @@ interface State {
   action: MonitorAction;
   threshold: number;
   lensRankThreshold: number;
+  selectedLensId: string;
   maxNewTokens: number;
   temperature: number;
   strength: number;
@@ -215,6 +232,7 @@ const state: State = {
   action: "kill",
   threshold: 0.62,
   lensRankThreshold: 64,
+  selectedLensId: "anthropic-qwen3-1.7b-wikitext",
   maxNewTokens: 90,
   temperature: 0.7,
   strength: 8.0,
@@ -248,6 +266,9 @@ async function loadInitialData() {
     ]);
     state.profiles = profiles;
     state.health = health;
+    if (profiles.lenses.some((lens) => lens.id === profiles.default_lens_id)) {
+      state.selectedLensId = profiles.default_lens_id;
+    }
     const initialScenario = profiles.scenarios.find((scenario) => scenario.mode === "monitor");
     if (initialScenario) applyScenario(initialScenario);
   } catch (error) {
@@ -341,7 +362,7 @@ function engineLine(): string {
 }
 
 function lensStatusText(): string {
-  const lens = state.health?.engine.jacobian_lens;
+  const lens = (state.result?.engine ?? state.health?.engine)?.jacobian_lens;
   if (!lens) return "Pending";
   if (lens.status === "mock") return "Mock";
   if (lens.available) return "Ready";
@@ -350,9 +371,10 @@ function lensStatusText(): string {
 }
 
 function lensPairText(): string {
-  const lens = state.health?.engine.jacobian_lens;
-  if (!state.health || !lens?.target_model) return "Pending";
-  const model = normalizeModelId(state.health.engine.model);
+  const engine = state.result?.engine ?? state.health?.engine;
+  const lens = engine?.jacobian_lens;
+  if (!engine || !lens?.target_model) return "Pending";
+  const model = normalizeModelId(engine.model);
   const target = normalizeModelId(lens.target_model);
   const metadata = lens.metadata_model ? normalizeModelId(lens.metadata_model) : target;
   return model === target && target === metadata ? "Matched" : "Mismatch";
@@ -464,6 +486,7 @@ function renderModelStateRail(): string {
     const inspectedFrame = selectedTraceFrame(visibleFrames);
     return `
       <div class="rail-stack">
+        ${renderLensPicker()}
         ${renderModelStatePanel()}
         ${state.result.mode === "rewrite" ? renderJSpaceInjectionPanel(state.result.jspace_injections) : ""}
         ${state.result.mode === "rewrite" ? renderInterventions(state.result) : ""}
@@ -475,10 +498,47 @@ function renderModelStateRail(): string {
 
   return `
     <div class="rail-stack">
+      ${renderLensPicker()}
       ${renderModelStatePanel()}
       ${renderModelStateEmpty()}
     </div>
   `;
+}
+
+function renderLensPicker(): string {
+  const lenses = state.profiles?.lenses ?? [];
+  const selected = lenses.find((lens) => lens.id === state.selectedLensId) ?? lenses[0];
+  const options = lenses.length
+    ? lenses
+        .map(
+          (lens) => `<option value="${escapeHtml(lens.id)}" ${lens.id === state.selectedLensId ? "selected" : ""}>${escapeHtml(lens.label)}</option>`
+        )
+        .join("")
+    : `<option>Loading compatible lenses...</option>`;
+  return renderRailSection(
+    "lens-picker",
+    "Lens",
+    `
+      <div class="border-b border-line p-3">
+        <label for="lens-picker-select" class="mb-1.5 block text-[10px] font-semibold uppercase tracking-normal text-neutral-500">Published lens</label>
+        <select id="lens-picker-select" class="h-10 w-full border border-line bg-white px-2 text-xs font-semibold outline-none focus:border-ink${lockedClass()}" ${lockedAttr()}>
+          ${options}
+        </select>
+        ${selected ? `<p class="mt-2 text-xs leading-5 text-neutral-600">${escapeHtml(selected.description)}</p>` : ""}
+      </div>
+      ${
+        selected
+          ? `<div class="model-state-values text-xs">
+              ${stateValueRow("Model", selected.target_model)}
+              ${stateValueRow("Fit corpus", selected.dataset)}
+              ${stateValueRow("Layers", String(selected.fitted_layers))}
+              ${stateValueRow("Status", `${lensPairText()} / ${lensStatusText()}`, true)}
+            </div>`
+          : ""
+      }
+    `,
+    lenses.length ? `${lenses.length} compatible` : "Loading"
+  );
 }
 
 function renderRailSection(id: string, title: string, body: string, meta = ""): string {
@@ -504,10 +564,8 @@ function renderRailSection(id: string, title: string, body: string, meta = ""): 
 }
 
 function renderModelStatePanel(): string {
-  const engine = state.health?.engine ?? state.result?.engine;
-  const lens = engine?.jacobian_lens;
+  const engine = state.result?.engine ?? state.health?.engine;
   const runtime = engine?.mode === "hf" ? "Modal/Qwen" : (engine?.mode ?? "Loading");
-  const lensSource = lens?.source ? `${lens.source}${lens.artifact ? ` / ${lens.artifact}` : ""}` : "Pending";
   return renderRailSection(
     "model-state",
     "Model State",
@@ -516,9 +574,6 @@ function renderModelStatePanel(): string {
         ${stateValueRow("Runtime", runtime)}
         ${stateValueRow("Model", engine?.model ?? "Qwen/Qwen3-1.7B")}
         ${stateValueRow("Readout", engine?.readout ?? "hidden-state")}
-        ${stateValueRow("Anthropic J-lens", lensStatusText())}
-        ${stateValueRow("Lens Pair", lensPairText())}
-        ${stateValueRow("Lens Source", lensSource)}
         ${stateValueRow("Layer Policy", state.activeMode === "monitor" ? "All fitted" : `L${engine?.layer ?? 15}`)}
         ${stateValueRow("Device", engine?.device ?? "Modal GPU")}
         ${stateValueRow("Policy", policyLabel(), true)}
@@ -1278,6 +1333,13 @@ function bindEvents() {
     });
   });
 
+  document.querySelector<HTMLSelectElement>("#lens-picker-select")?.addEventListener("change", (event) => {
+    state.selectedLensId = (event.currentTarget as HTMLSelectElement).value;
+    state.result = null;
+    state.inspectedStep = null;
+    render();
+  });
+
   document.querySelectorAll<HTMLButtonElement>("[data-scenario]").forEach((button) => {
     button.addEventListener("click", () => {
       const scenario = state.profiles?.scenarios.find((item) => item.id === button.dataset.scenario);
@@ -1468,6 +1530,7 @@ function currentRunPayload(): RunRequestPayload {
     action: state.action,
     threshold: state.threshold,
     lens_rank_threshold: state.lensRankThreshold,
+    lens_id: state.selectedLensId,
     max_new_tokens: state.maxNewTokens,
     temperature: state.temperature,
     strength: state.strength,

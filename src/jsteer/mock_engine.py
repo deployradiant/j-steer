@@ -7,6 +7,7 @@ import time
 import uuid
 
 from .concepts import CONCEPTS, REWRITE_PROFILES
+from .lenses import DEFAULT_LENS_ID, LENSES
 from .lookups import lookup_jspace_injections
 from .schemas import (
     ConceptScore,
@@ -43,6 +44,8 @@ class MockJSpaceEngine:
             device=self.device,
             readout=self.readout,
             jacobian_lens=JacobianLensInfo(
+                id=DEFAULT_LENS_ID,
+                label=LENSES[DEFAULT_LENS_ID].label,
                 available=True,
                 status="mock",
                 source="mock-jacobian-lens",
@@ -55,6 +58,8 @@ class MockJSpaceEngine:
         )
 
     def run(self, request: RunRequest) -> RunResponse:
+        if request.lens_id != DEFAULT_LENS_ID:
+            raise ValueError(f"Unsupported lens {request.lens_id!r}.")
         started = time.perf_counter()
         if request.mode == "rewrite":
             response = self._run_rewrite(request)

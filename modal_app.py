@@ -28,6 +28,7 @@ image = (
             "PYTHONPATH": "/app/src",
             "JSTEER_ENGINE": "hf",
             "JSTEER_MODEL": "Qwen/Qwen3-1.7B",
+            "JSTEER_LENS_ID": "anthropic-qwen3-1.7b-wikitext",
             "JSTEER_JLENS_REPO": "neuronpedia/jacobian-lens",
             "JSTEER_JLENS_FILE": "qwen3-1.7b/jlens/Salesforce-wikitext/Qwen3-1.7B_jacobian_lens.pt",
             "JSTEER_JLENS_MODEL": "Qwen/Qwen3-1.7B",

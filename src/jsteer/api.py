@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .concepts import SCENARIOS, public_concepts, public_rewrite_profiles
 from .engine import create_engine
+from .lenses import DEFAULT_LENS_ID, public_lenses
 from .schemas import CustomLensRequest, CustomLensResponse, ProfilesResponse, RunMetrics, RunRequest, RunResponse
 
 
@@ -46,6 +47,8 @@ def create_app(engine_mode: str | None = None, static_dir: str | Path | None = N
             concepts=public_concepts(),
             rewrite_profiles=public_rewrite_profiles(),
             scenarios=list(SCENARIOS),
+            lenses=public_lenses(),
+            default_lens_id=DEFAULT_LENS_ID,
         )
 
     @app.post("/api/run", response_model=RunResponse)

@@ -25,6 +25,23 @@ def test_profiles_endpoint() -> None:
     assert body["concepts"]
     assert body["rewrite_profiles"]
     assert body["scenarios"]
+    assert body["lenses"][0]["id"] == body["default_lens_id"]
+    assert body["lenses"][0]["target_model"] == "Qwen/Qwen3-1.7B"
+
+
+def test_run_rejects_unknown_lens() -> None:
+    client = TestClient(create_app(engine_mode="mock"))
+    response = client.post(
+        "/api/run",
+        json={
+            "mode": "monitor",
+            "prompt": "Write a normal enterprise checklist.",
+            "lens_id": "wrong-model-lens",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Unsupported lens" in response.json()["detail"]
 
 
 def test_run_endpoint() -> None:

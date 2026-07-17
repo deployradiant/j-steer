@@ -13,6 +13,8 @@ The primary `Tripwire` path uses Anthropic's published `jlens` implementation an
 
 This monitor does not fit a custom concept lens and does not use the repo's calibrated concept vectors as a proxy kill switch. Unsafe word sets are policy groupings over exact Qwen tokenizer IDs. Keyword capitalization and leading-space variants are included when they each encode to one token; phrases that encode to multiple tokens are not direct filters.
 
+The right model-state rail owns lens selection. The API publishes only artifacts compatible with the deployed checkpoint, and every run includes a validated `lens_id`. The current Qwen3-1.7B collection contains one compatible published fit, so the selector has one honest option rather than suggesting that a lens fitted for a different model can be swapped in.
+
 The older concept-vector implementation remains in `hf_engine.py` as prior art and powers the separate `Rewrite` demo. Rewrite profiles combine a hidden-state vector edit at the configured control layer with a decoder constraint that emits an approved phrase. The legacy `/api/custom-lens` endpoint also remains available for comparison experiments, but it is not exposed in the primary demo UI and is not used by `Tripwire`.
 
 Run traces include a token-by-layer J-lens heatmap. Hover a produced token, heatmap column, or cell to inspect the layer's top decoded words and any unsafe token rank that fired the tripwire.
@@ -63,6 +65,7 @@ uv run modal deploy -m modal_app
 Defaults:
 
 - Model: `Qwen/Qwen3-1.7B`
+- Lens ID: `anthropic-qwen3-1.7b-wikitext`
 - Jacobian lens repo: `neuronpedia/jacobian-lens`
 - Jacobian lens artifact: `qwen3-1.7b/jlens/Salesforce-wikitext/Qwen3-1.7B_jacobian_lens.pt`
 - Jacobian lens target model: `Qwen/Qwen3-1.7B`
