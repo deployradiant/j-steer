@@ -391,12 +391,13 @@ function policyLabel(): string {
 
 function renderNavigationSidebar(): string {
   const collapsed = state.modeRailCollapsed;
-  const headerLayout = collapsed ? "justify-center px-0" : "justify-between gap-2 px-3";
+  const headerLayout = collapsed ? "justify-center px-0" : "justify-center px-3";
+  const togglePosition = collapsed ? "" : "absolute right-2";
   return `
     <div>
-      <div class="flex h-12 items-center border-b border-line ${headerLayout}">
+      <div class="relative flex h-12 items-center border-b border-line ${headerLayout}">
         <div class="mode-rail-heading text-xs font-semibold uppercase tracking-normal text-neutral-500">Mode</div>
-        <button id="toggle-mode-rail" class="flex h-8 w-8 shrink-0 items-center justify-center text-ink hover:text-ink" type="button" aria-label="${collapsed ? "Expand mode sidebar" : "Collapse mode sidebar"}">
+        <button id="toggle-mode-rail" class="${togglePosition} flex h-8 w-8 shrink-0 items-center justify-center text-ink hover:text-ink" type="button" aria-label="${collapsed ? "Expand mode sidebar" : "Collapse mode sidebar"}">
           <i data-lucide="${collapsed ? "panel-left-open" : "panel-left-close"}" class="h-4 w-4"></i>
         </button>
       </div>
