@@ -565,6 +565,88 @@ input::placeholder {
   box-shadow: inset 0 -1px 0 #ff4d5e;
 }
 
+.run-progress {
+  height: 4px;
+  overflow: hidden;
+  background: #e6e6e6;
+}
+
+.run-progress-fill {
+  height: 100%;
+  background: var(--primary-50);
+  transition: width 180ms ease-out;
+}
+
+.run-progress.is-hazard .run-progress-fill {
+  background: var(--flame-60);
+}
+
+.run-progress.is-muted .run-progress-fill {
+  background: #8a8a8a;
+}
+
+.stream-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: -0.12em;
+  background: var(--primary-50);
+  animation: stream-cursor-pulse 760ms steps(1, end) infinite;
+}
+
+.run-output.is-running .answer-token:last-of-type {
+  animation: stream-token-arrive 180ms ease-out;
+}
+
+.stream-stop-note {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  border-top: 1px solid #d8d8d8;
+  padding: 10px 12px;
+  color: #4f4f4f;
+  background: #f8f8f8;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.stream-stop-note.is-hazard {
+  color: #bc1f31;
+  background: #fff1f2;
+}
+
+@keyframes stream-cursor-pulse {
+  0%,
+  48% {
+    opacity: 1;
+  }
+  49%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes stream-token-arrive {
+  from {
+    background: rgba(66, 96, 255, 0.3);
+  }
+  to {
+    background: rgba(66, 96, 255, 0.18);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .run-progress-fill {
+    transition: none;
+  }
+
+  .stream-cursor,
+  .run-output.is-running .answer-token:last-of-type {
+    animation: none;
+  }
+}
+
 .token-heatmap {
   display: grid;
   gap: 4px;

@@ -431,12 +431,13 @@ class HFJSpaceEngine:
                     frame.note = "Tripwire crossed during hidden-state decode monitoring."
                     blocked_frames = frames + decode_frames[: index + 1]
                     top = frame.top_concepts[0]
+                    partial_text = frame.generated_text
                     return RunResponse(
                         id=str(uuid.uuid4()),
                         status="blocked",
                         mode="monitor",
                         prompt=request.prompt,
-                        output="",
+                        output=partial_text,
                         summary=(
                             f"Run killed during decode: {top.label} reached "
                             f"{top.score:.2f} at step {frame.step}."
@@ -445,7 +446,7 @@ class HFJSpaceEngine:
                         frames=blocked_frames,
                         metrics=RunMetrics(
                             prompt_tokens=int(input_ids.shape[-1]),
-                            completion_tokens=0,
+                            completion_tokens=len(self.tokenizer.encode(partial_text, add_special_tokens=False)),
                             peak_score=max(self._frame_peak(item) for item in blocked_frames),
                         ),
                     )
@@ -541,6 +542,7 @@ class HFJSpaceEngine:
             monitor_ids=monitor_ids,
             steering=None,
         ):
+            text = frame.generated_text
             if request.action == "kill" and self._frame_peak(frame) >= request.threshold:
                 frame.action = "blocked"
                 frame.note = "Tripwire crossed during hidden-state decode monitoring."
@@ -554,21 +556,20 @@ class HFJSpaceEngine:
                         status="blocked",
                         mode="monitor",
                         prompt=request.prompt,
-                        output="",
+                        output=text,
                         summary=f"Run killed during decode: {top.label} reached {top.score:.2f} at step {frame.step}.",
                         engine=self.info(),
                         frames=frames,
                         metrics=RunMetrics(
                             latency_ms=int((time.perf_counter() - started) * 1000),
                             prompt_tokens=int(input_ids.shape[-1]),
-                            completion_tokens=0,
+                            completion_tokens=len(self.tokenizer.encode(text, add_special_tokens=False)),
                             peak_score=max(self._frame_peak(item) for item in frames),
                         ),
                     ),
                 }
                 return
             frames.append(frame)
-            text = frame.generated_text
             yield {"type": "frame", "frame": frame}
 
         yield {

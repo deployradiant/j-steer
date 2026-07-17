@@ -10,8 +10,6 @@ import {
   Play,
   RadioTower,
   RefreshCw,
-  Route,
-  RouteOff,
   ScanEye,
   ShieldAlert,
   WandSparkles,
@@ -220,6 +218,7 @@ interface State {
   result: RunResponse | null;
   customResult: CustomLensResponse | null;
   replayCount: number;
+  lastRunMaxTokens: number;
   inspectedStep: number | null;
   modeRailCollapsed: boolean;
   collapsedRailSections: Set<string>;
@@ -268,6 +267,7 @@ const state: State = {
   result: null,
   customResult: null,
   replayCount: 999,
+  lastRunMaxTokens: 90,
   inspectedStep: null,
   modeRailCollapsed: false,
   collapsedRailSections: new Set(),
@@ -374,8 +374,6 @@ function render() {
       Play,
       RadioTower,
       RefreshCw,
-      Route,
-      RouteOff,
       ScanEye,
       ShieldAlert,
       WandSparkles
@@ -925,7 +923,7 @@ function renderResults(): string {
     </div>
     <div class="space-y-4 p-4">
       ${renderImpactPanel(response, visibleFrames)}
-      ${response.mode === "rewrite" ? renderRewriteOutputs(response, visibleFrames, inspectedFrame) : renderMonitorOutput(response, visibleFrames, inspectedFrame)}
+      ${renderStreamedOutput(response, visibleFrames, inspectedFrame)}
       ${renderActivationExplorer(response, visibleFrames, inspectedFrame)}
     </div>
   `;
@@ -1091,45 +1089,64 @@ function statusBadge(status: RunStatus): string {
   return `<span class="inline-flex items-center gap-1 border px-2.5 py-1 text-xs font-semibold ${styles[status]}">${escapeHtml(status.toUpperCase())}</span>`;
 }
 
-function renderMonitorOutput(response: RunResponse, frames: TraceFrame[], selectedFrame: TraceFrame | null): string {
-  if (response.status === "blocked") {
-    return `
-      <section class="border border-hazard bg-red-50 p-4">
-        <div class="flex items-center gap-3">
-          <i data-lucide="octagon-x" class="h-5 w-5 text-hazard"></i>
-          <div>
-            <h3 class="font-semibold text-hazard">Run Killed</h3>
-            <p class="text-sm text-red-900">No completion tokens were released.</p>
-          </div>
-        </div>
-      </section>
-    `;
-  }
-  return `
-    <section class="border border-line bg-field p-4">
-      <h3 class="mb-2 text-sm font-semibold uppercase tracking-normal text-neutral-500">Output</h3>
-      <p class="whitespace-pre-wrap text-sm leading-6">${renderGeneratedAnswer(frames, selectedFrame, response.output)}</p>
-    </section>
-  `;
-}
+function renderStreamedOutput(response: RunResponse, frames: TraceFrame[], selectedFrame: TraceFrame | null): string {
+  const decodeFrames = response.frames.filter((frame) => frame.phase === "decode");
+  const streamedTokens = Math.max(decodeFrames.length, response.metrics.completion_tokens);
+  const tokenBudget = Math.max(1, state.lastRunMaxTokens);
+  const finished = response.status === "completed" || response.status === "rewritten";
+  const stopped = response.status === "blocked" || response.status === "cancelled" || response.status === "error";
+  const progress = finished ? 100 : Math.min(100, (streamedTokens / tokenBudget) * 100);
+  const outputText = response.output || decodeFrames.at(-1)?.generated_text || "";
+  const progressLabel = finished
+    ? `${streamedTokens} tokens · complete`
+    : `${streamedTokens} / ${tokenBudget} token budget`;
+  const emptyLabel = response.status === "blocked"
+    ? "Tripwire fired at the prompt boundary before any token was decoded."
+    : response.status === "running"
+      ? "Waiting for the first decoded token..."
+      : "No decoded output was captured.";
+  const progressTone = response.status === "blocked" || response.status === "error"
+    ? "is-hazard"
+    : response.status === "cancelled"
+      ? "is-muted"
+      : "is-signal";
 
-function renderRewriteOutputs(response: RunResponse, frames: TraceFrame[], selectedFrame: TraceFrame | null): string {
   return `
-    <section class="grid gap-3 lg:grid-cols-2">
-      <div class="border border-line bg-field p-4">
-        <div class="mb-2 flex items-center gap-2 text-sm font-semibold">
-          <i data-lucide="route-off" class="h-4 w-4"></i>
-          Raw
+    <section class="run-output ${response.status === "running" ? "is-running" : ""} border border-line" aria-busy="${String(response.status === "running")}">
+      <div class="border-b border-line bg-field p-3">
+        <div class="mb-2 flex items-center justify-between gap-3">
+          <div class="flex min-w-0 items-center gap-2">
+            ${statusBadge(response.status)}
+            <span class="truncate text-sm font-semibold">Output stream</span>
+          </div>
+          <span class="shrink-0 font-mono text-xs text-neutral-500">${escapeHtml(progressLabel)}</span>
         </div>
-        <p class="whitespace-pre-wrap text-sm leading-6 text-neutral-700">${escapeHtml(response.baseline_output ?? "Baseline comparison disabled.")}</p>
-      </div>
-      <div class="border border-violetless bg-sky-50 p-4">
-        <div class="mb-2 flex items-center gap-2 text-sm font-semibold text-violetless">
-          <i data-lucide="route" class="h-4 w-4"></i>
-          Steered
+        <div
+          class="run-progress ${progressTone}"
+          role="progressbar"
+          aria-label="Generation progress"
+          aria-valuemin="0"
+          aria-valuemax="${tokenBudget}"
+          aria-valuenow="${Math.min(tokenBudget, streamedTokens)}"
+        >
+          <div class="run-progress-fill" style="width: ${progress}%"></div>
         </div>
-        <p class="whitespace-pre-wrap text-sm leading-6">${renderGeneratedAnswer(frames, selectedFrame, response.output)}</p>
       </div>
+      <div class="min-h-24 p-4" aria-live="polite">
+        ${
+          outputText
+            ? `<p class="whitespace-pre-wrap text-sm leading-6">${renderGeneratedAnswer(frames, selectedFrame, outputText)}${response.status === "running" ? `<span class="stream-cursor" aria-hidden="true"></span>` : ""}</p>`
+            : `<p class="text-sm text-neutral-500">${escapeHtml(emptyLabel)}</p>`
+        }
+      </div>
+      ${
+        stopped
+          ? `<div class="stream-stop-note ${response.status === "blocked" || response.status === "error" ? "is-hazard" : ""}">
+              <i data-lucide="octagon-x" class="h-4 w-4 shrink-0"></i>
+              <span><strong>Stopped at ${streamedTokens} of ${tokenBudget} tokens.</strong> ${escapeHtml(response.summary)}</span>
+            </div>`
+          : ""
+      }
     </section>
   `;
 }
@@ -1139,20 +1156,13 @@ function renderGeneratedAnswer(frames: TraceFrame[], selectedFrame: TraceFrame |
   if (!decodeFrames.length) return escapeHtml(fallbackText);
   const selectedStep = selectedFrame?.step ?? decodeFrames.at(-1)?.step ?? 0;
   return decodeFrames
-    .map((frame) => {
+    .map((frame, index) => {
       const token = frame.token || "";
       if (!token) return "";
       const selected = frame.step === selectedStep;
       const tripwire = frame.layer_activations?.some(isTripwireActivation) ?? false;
-      return `
-        <span
-          role="button"
-          tabindex="0"
-          data-frame-step="${frame.step}"
-          class="answer-token ${selected ? "is-selected" : ""} ${tripwire ? "is-tripwire" : ""}"
-          title="step ${frame.step}"
-        >${escapeHtml(token)}</span>
-      `;
+      const separator = index > 0 && !/^\s/.test(token) ? " " : "";
+      return `${separator}<span role="button" tabindex="0" data-frame-step="${frame.step}" class="answer-token ${selected ? "is-selected" : ""} ${tripwire ? "is-tripwire" : ""}" title="step ${frame.step}">${escapeHtml(token)}</span>`;
     })
     .join("");
 }
@@ -1673,6 +1683,7 @@ async function run() {
   const controller = new AbortController();
   activeRunController = controller;
   const payload = currentRunPayload();
+  state.lastRunMaxTokens = payload.max_new_tokens;
   state.loading = true;
   state.cancelRequested = false;
   state.error = null;
@@ -1762,7 +1773,7 @@ function currentRunPayload(): RunRequestPayload {
     max_new_tokens: state.maxNewTokens,
     temperature: state.temperature,
     strength: state.strength,
-    compare_baseline: true
+    compare_baseline: false
   };
 }
 

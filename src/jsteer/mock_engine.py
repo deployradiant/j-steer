@@ -241,7 +241,7 @@ class MockJSpaceEngine:
                     status="blocked",
                     mode="monitor",
                     prompt=request.prompt,
-                    output="",
+                    output=generated,
                     summary=(
                         f"Run killed during decode: {top.label} reached "
                         f"{top.score:.2f} at step {idx}."
@@ -250,7 +250,7 @@ class MockJSpaceEngine:
                     frames=frames,
                     metrics=RunMetrics(
                         prompt_tokens=max(8, len(request.prompt.split())),
-                        completion_tokens=0,
+                        completion_tokens=idx,
                         peak_score=max(self._frame_peak(frame) for frame in frames),
                     ),
                 )
