@@ -486,7 +486,6 @@ function renderModelStateRail(): string {
     const inspectedFrame = selectedTraceFrame(visibleFrames);
     return `
       <div class="rail-stack">
-        ${renderLensPicker()}
         ${renderModelStatePanel()}
         ${state.result.mode === "rewrite" ? renderJSpaceInjectionPanel(state.result.jspace_injections) : ""}
         ${state.result.mode === "rewrite" ? renderInterventions(state.result) : ""}
@@ -498,14 +497,13 @@ function renderModelStateRail(): string {
 
   return `
     <div class="rail-stack">
-      ${renderLensPicker()}
       ${renderModelStatePanel()}
       ${renderModelStateEmpty()}
     </div>
   `;
 }
 
-function renderLensPicker(): string {
+function renderLensPickerControls(): string {
   const lenses = state.profiles?.lenses ?? [];
   const selected = lenses.find((lens) => lens.id === state.selectedLensId) ?? lenses[0];
   const options = lenses.length
@@ -515,30 +513,24 @@ function renderLensPicker(): string {
         )
         .join("")
     : `<option>Loading compatible lenses...</option>`;
-  return renderRailSection(
-    "lens-picker",
-    "Lens",
-    `
-      <div class="border-b border-line p-3">
-        <label for="lens-picker-select" class="mb-1.5 block text-[10px] font-semibold uppercase tracking-normal text-neutral-500">Published lens</label>
-        <select id="lens-picker-select" class="h-10 w-full border border-line bg-white px-2 text-xs font-semibold outline-none focus:border-ink${lockedClass()}" ${lockedAttr()}>
-          ${options}
-        </select>
-        ${selected ? `<p class="mt-2 text-xs leading-5 text-neutral-600">${escapeHtml(selected.description)}</p>` : ""}
-      </div>
-      ${
-        selected
-          ? `<div class="model-state-values text-xs">
-              ${stateValueRow("Model", selected.target_model)}
-              ${stateValueRow("Fit corpus", selected.dataset)}
-              ${stateValueRow("Layers", String(selected.fitted_layers))}
-              ${stateValueRow("Status", `${lensPairText()} / ${lensStatusText()}`, true)}
-            </div>`
-          : ""
-      }
-    `,
-    lenses.length ? `${lenses.length} compatible` : "Loading"
-  );
+  return `
+    <div class="border-b border-line p-3">
+      <label for="lens-picker-select" class="mb-1.5 block text-[10px] font-semibold uppercase tracking-normal text-neutral-500">Published lens</label>
+      <select id="lens-picker-select" class="h-10 w-full border border-line bg-white px-2 text-xs font-semibold outline-none focus:border-ink${lockedClass()}" ${lockedAttr()}>
+        ${options}
+      </select>
+      ${selected ? `<p class="mt-2 text-xs leading-5 text-neutral-600">${escapeHtml(selected.description)}</p>` : ""}
+    </div>
+    ${
+      selected
+        ? `<div class="model-state-values text-xs">
+            ${stateValueRow("Fit corpus", selected.dataset)}
+            ${stateValueRow("Lens layers", String(selected.fitted_layers))}
+            ${stateValueRow("Lens status", `${lensPairText()} / ${lensStatusText()}`, true)}
+          </div>`
+        : ""
+    }
+  `;
 }
 
 function renderRailSection(id: string, title: string, body: string, meta = ""): string {
@@ -566,10 +558,12 @@ function renderRailSection(id: string, title: string, body: string, meta = ""): 
 function renderModelStatePanel(): string {
   const engine = state.result?.engine ?? state.health?.engine;
   const runtime = engine?.mode === "hf" ? "Modal/Qwen" : (engine?.mode ?? "Loading");
+  const lensCount = state.profiles?.lenses.length ?? 0;
   return renderRailSection(
     "model-state",
     "Model State",
     `
+      ${renderLensPickerControls()}
       <div class="model-state-values text-xs">
         ${stateValueRow("Runtime", runtime)}
         ${stateValueRow("Model", engine?.model ?? "Qwen/Qwen3-1.7B")}
@@ -578,7 +572,8 @@ function renderModelStatePanel(): string {
         ${stateValueRow("Device", engine?.device ?? "Modal GPU")}
         ${stateValueRow("Policy", policyLabel(), true)}
       </div>
-    `
+    `,
+    lensCount ? `${lensCount} lens` : "Loading"
   );
 }
 
