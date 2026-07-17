@@ -260,7 +260,7 @@ class MockJSpaceEngine:
             mode="monitor",
             prompt=request.prompt,
             output=output,
-            summary="Run completed with latent monitoring enabled; no tripwire required termination.",
+            summary=self._monitor_completion_summary(frames),
             engine=self.info(),
             frames=frames,
             metrics=RunMetrics(
@@ -697,16 +697,27 @@ class MockJSpaceEngine:
                 band = math.exp(-abs(layer - center) / 7.5)
                 wave = 0.025 * math.sin((step + 1) * (layer + 1) * (index + 1))
                 value = max(0.04, min(0.99, score.score * (0.34 + 0.66 * band) + wave))
-                is_match = rank_threshold is not None and score.polarity == "risk" and value >= 0.5
+                is_match = rank_threshold is not None and score.polarity == "risk" and value >= 0.34
                 rank = max(1, round((1.0 - value) * rank_threshold)) if is_match else None
                 matched_token = score.evidence[0].split()[0] if is_match and score.evidence else None
-                top_tokens = list(dict.fromkeys([*(score.evidence[:3]), "review", "policy"]))[:5]
+                if rank_threshold is not None and not is_match:
+                    concept_id = "jlens_readout"
+                    label = "review"
+                    polarity = "neutral"
+                    candidate_score = 0.0
+                    top_tokens = ["review", "policy", "integration", "support"]
+                else:
+                    concept_id = score.id
+                    label = score.label
+                    polarity = score.polarity
+                    candidate_score = round(value, 3)
+                    top_tokens = list(dict.fromkeys([*(score.evidence[:3]), "review", "policy"]))[:5]
                 candidate = LayerActivation(
                     layer=layer,
-                    concept_id=score.id,
-                    label=score.label,
-                    score=round(value, 3),
-                    polarity=score.polarity,
+                    concept_id=concept_id,
+                    label=label,
+                    score=candidate_score,
+                    polarity=polarity,
                     rank=rank,
                     matched_token=matched_token,
                     top_tokens=top_tokens,
@@ -721,6 +732,18 @@ class MockJSpaceEngine:
     def _best_lens_match(frame: TraceFrame) -> LayerActivation | None:
         matches = [item for item in frame.layer_activations if item.rank is not None]
         return min(matches, key=lambda item: item.rank or 10**9, default=None)
+
+    @staticmethod
+    def _monitor_completion_summary(frames: list[TraceFrame]) -> str:
+        matches = sum(
+            1
+            for frame in frames
+            for readout in frame.layer_activations
+            if readout.polarity == "risk" and readout.rank is not None
+        )
+        if matches:
+            return f"Observed {matches} unsafe mock J-lens rank matches; generation was allowed to continue."
+        return "Run completed with mock J-lens vocabulary monitoring; no unsafe word crossed the rank cutoff."
 
     def _mock_jacobian_scores(self, scores: list[ConceptScore]) -> list[ConceptScore]:
         jacobian_scores: list[ConceptScore] = []

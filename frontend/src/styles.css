@@ -248,10 +248,6 @@ select {
   color: var(--primary-40);
 }
 
-.custom-concept-row + .custom-concept-row {
-  border-top: 1px solid #d8d8d8;
-}
-
 .run-parameter-bar {
   display: grid;
   gap: 8px;
@@ -382,10 +378,6 @@ select {
 
   .run-parameter-bar.is-rewrite {
     grid-template-columns: minmax(88px, 1fr) minmax(88px, 1fr) minmax(68px, 0.72fr) minmax(68px, 0.72fr) auto;
-  }
-
-  .run-parameter-bar.is-custom {
-    grid-template-columns: minmax(96px, 1fr) auto;
   }
 
   .run-stats {
@@ -541,14 +533,6 @@ select {
 textarea::placeholder,
 input::placeholder {
   color: #9a9a9a;
-}
-
-.activation-cell {
-  min-height: 24px;
-  border: 1px solid #d8d8d8;
-  background:
-    linear-gradient(90deg, var(--cell-color) calc(var(--score) * 100%), #ffffff 0),
-    #ffffff;
 }
 
 .answer-token {

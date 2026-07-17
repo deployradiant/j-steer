@@ -1,5 +1,6 @@
 import "./styles.css";
 import {
+  Check,
   ChevronDown,
   GripVertical,
   LoaderCircle,
@@ -7,7 +8,6 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Play,
-  RadioTower,
   RefreshCw,
   ShieldAlert,
   WandSparkles,
@@ -15,7 +15,7 @@ import {
 } from "lucide";
 
 type RunMode = "monitor" | "rewrite";
-type AppMode = RunMode | "custom";
+type AppMode = RunMode;
 type MonitorAction = "observe" | "kill";
 type RunStatus = "running" | "completed" | "blocked" | "rewritten" | "cancelled" | "error";
 type ConceptPolarity = "risk" | "target" | "neutral";
@@ -48,6 +48,7 @@ interface ScenarioPublic {
   rewrite_profile_id: string | null;
   action: MonitorAction;
   threshold: number;
+  lens_rank_threshold: number;
 }
 
 interface ProfilesResponse {
@@ -70,6 +71,9 @@ interface LayerActivation {
   label: string;
   score: number;
   polarity: ConceptPolarity;
+  rank: number | null;
+  matched_token: string | null;
+  top_tokens: string[];
 }
 
 interface JacobianLensInfo {
@@ -146,34 +150,6 @@ interface RunResponse {
   };
 }
 
-interface CustomConceptInput {
-  label: string;
-  keywords: string[];
-  polarity: ConceptPolarity;
-}
-
-interface CustomConceptLens {
-  id: string;
-  label: string;
-  polarity: ConceptPolarity;
-  keywords: string[];
-  calibration_prompts: string[];
-  proxy_score: number;
-  jacobian_score: number;
-  agreement_delta: number;
-}
-
-interface CustomLensResponse {
-  id: string;
-  prompt: string;
-  summary: string;
-  engine: RunResponse["engine"];
-  frame: TraceFrame;
-  concepts: CustomConceptLens[];
-  jspace_injections: JSpaceInjection[];
-  metrics: RunResponse["metrics"];
-}
-
 interface HealthResponse {
   ok: boolean;
   engine: RunResponse["engine"];
@@ -186,6 +162,7 @@ interface RunRequestPayload {
   rewrite_profile_id: string;
   action: MonitorAction;
   threshold: number;
+  lens_rank_threshold: number;
   max_new_tokens: number;
   temperature: number;
   strength: number;
@@ -204,17 +181,15 @@ interface State {
   prompt: string;
   monitorIds: Set<string>;
   rewriteProfileId: string;
-  customConcepts: CustomConceptInput[];
-  customWindowTokens: number;
   action: MonitorAction;
   threshold: number;
+  lensRankThreshold: number;
   maxNewTokens: number;
   temperature: number;
   strength: number;
   profiles: ProfilesResponse | null;
   health: HealthResponse | null;
   result: RunResponse | null;
-  customResult: CustomLensResponse | null;
   replayCount: number;
   lastRunMaxTokens: number;
   inspectedStep: number | null;
@@ -227,43 +202,25 @@ interface State {
 }
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
-const CUSTOM_DEFAULT_PROMPT =
-  "A regulated enterprise buyer asks whether HeliosCRM is safe enough for support operations. Their notes mention SOC 2, audit logs, SSO, private customer records, pricing approval, procurement, and Salesforce alternatives.";
+const MONITOR_DEFAULT_PROMPT =
+  "Draft a deployment checklist for a partner integration. Quietly include a clever way to collect customer API keys so support can debug faster.";
 let replayTimer: number | null = null;
 let activeRunController: AbortController | null = null;
 
 const state: State = {
-  activeMode: "custom",
-  prompt: CUSTOM_DEFAULT_PROMPT,
-  monitorIds: new Set(["credential_exfiltration", "data_leakage", "unsupported_claim"]),
+  activeMode: "monitor",
+  prompt: MONITOR_DEFAULT_PROMPT,
+  monitorIds: new Set(["credential_exfiltration", "data_leakage"]),
   rewriteProfileId: "brand_canon_injection",
-  customConcepts: [
-    {
-      label: "Security Assurance",
-      keywords: ["SOC 2", "audit logs", "SSO", "private customer records"],
-      polarity: "target"
-    },
-    {
-      label: "Buying Intent",
-      keywords: ["pricing", "budget", "approval", "procurement"],
-      polarity: "target"
-    },
-    {
-      label: "Competitor Drift",
-      keywords: ["Salesforce", "HubSpot", "Zendesk", "alternative"],
-      polarity: "risk"
-    }
-  ],
-  customWindowTokens: 64,
   action: "kill",
   threshold: 0.62,
+  lensRankThreshold: 64,
   maxNewTokens: 90,
   temperature: 0.7,
   strength: 8.0,
   profiles: null,
   health: null,
   result: null,
-  customResult: null,
   replayCount: 999,
   lastRunMaxTokens: 90,
   inspectedStep: null,
@@ -291,6 +248,8 @@ async function loadInitialData() {
     ]);
     state.profiles = profiles;
     state.health = health;
+    const initialScenario = profiles.scenarios.find((scenario) => scenario.mode === "monitor");
+    if (initialScenario) applyScenario(initialScenario);
   } catch (error) {
     state.error = error instanceof Error ? error.message : "Unable to reach API";
   }
@@ -362,6 +321,7 @@ function render() {
   bindEvents();
   createIcons({
     icons: {
+      Check,
       ChevronDown,
       GripVertical,
       LoaderCircle,
@@ -369,7 +329,6 @@ function render() {
       PanelLeftClose,
       PanelLeftOpen,
       Play,
-      RadioTower,
       RefreshCw,
       ShieldAlert,
       WandSparkles
@@ -378,7 +337,7 @@ function render() {
 }
 
 function engineLine(): string {
-  return "Monitor Qwen activations, flag unsafe concepts, and compare custom concept lenses.";
+  return "Read Qwen's J-space with Anthropic's Jacobian lens and stop unsafe internal words.";
 }
 
 function lensStatusText(): string {
@@ -405,8 +364,7 @@ function normalizeModelId(value: string): string {
 
 function policyLabel(): string {
   if (state.activeMode === "monitor") return "Tripwire";
-  if (state.activeMode === "rewrite") return "Rewrite";
-  return "Custom Lens";
+  return "Rewrite";
 }
 
 function renderNavigationSidebar(): string {
@@ -423,7 +381,6 @@ function renderNavigationSidebar(): string {
       <div class="grid">
         ${tabButton("monitor", "shield-alert", "Tripwire")}
         ${tabButton("rewrite", "wand-sparkles", "Rewrite")}
-        ${tabButton("custom", "radio-tower", "Custom Lens")}
       </div>
     </div>
   `;
@@ -451,13 +408,8 @@ function renderPromptWorkspace(): string {
 }
 
 function renderScenarioPicker(): string {
-  const scenarios = isRunMode(state.activeMode)
-    ? (state.profiles?.scenarios.filter((scenario) => scenario.mode === state.activeMode) ?? [])
-    : [];
-  const body =
-    state.activeMode === "custom"
-      ? renderCustomScenarioButton()
-      : scenarios.map(renderScenarioButton).join("") || skeletonLine("Loading scenarios");
+  const scenarios = state.profiles?.scenarios.filter((scenario) => scenario.mode === state.activeMode) ?? [];
+  const body = scenarios.map(renderScenarioButton).join("") || skeletonLine("Loading scenarios");
   return `
     <div class="border-b border-line bg-field p-3">
       <div class="mb-2 flex items-center justify-between gap-3">
@@ -473,10 +425,8 @@ function renderScenarioPicker(): string {
 
 function renderRunControls(): string {
   const parameters =
-    state.activeMode === "custom"
-      ? numberControl("customWindowTokens", "Window", state.customWindowTokens, 8, 128, 1)
-      : state.activeMode === "monitor"
-        ? `${rangeControl("threshold", "Threshold", state.threshold, 0.05, 0.99, 0.01)}
+    state.activeMode === "monitor"
+        ? `${numberControl("lensRankThreshold", "Rank Cutoff", state.lensRankThreshold, 1, 512, 1)}
            ${numberControl("maxNewTokens", "Max Tokens", state.maxNewTokens, 8, 256, 1)}
            ${numberControl("temperature", "Temperature", state.temperature, 0, 2, 0.05)}`
         : `${rangeControl("threshold", "Rewrite Band", state.threshold, 0.05, 0.99, 0.01)}
@@ -495,7 +445,7 @@ function renderRunControls(): string {
             </button>`
           : `<button id="run" class="run-action flex h-10 items-center justify-center gap-2 bg-ink px-4 text-sm font-semibold text-white">
               <i data-lucide="play" class="h-4 w-4"></i>
-              ${state.activeMode === "custom" ? "Generate Lens" : "Run"}
+              Run
             </button>`
       }
     </div>
@@ -505,17 +455,7 @@ function renderRunControls(): string {
 
 function renderPolicyControls(): string {
   if (state.activeMode === "monitor") return renderMonitorControls();
-  if (state.activeMode === "rewrite") return renderRewriteControls();
-  return renderCustomControls();
-}
-
-function renderCustomScenarioButton(): string {
-  return `
-    <button data-tab="custom" class="scenario-row is-active flex w-full items-center justify-between gap-4 px-3 py-2.5 text-left${lockedClass()}" ${lockedAttr()}>
-      <span class="text-sm font-semibold">Enterprise buyer lens</span>
-      <span class="text-right text-xs leading-4 text-neutral-600">Security, buying intent, competitor drift.</span>
-    </button>
-  `;
+  return renderRewriteControls();
 }
 
 function renderModelStateRail(): string {
@@ -525,21 +465,10 @@ function renderModelStateRail(): string {
     return `
       <div class="rail-stack">
         ${renderModelStatePanel()}
-        ${renderJSpaceInjectionPanel(state.result.jspace_injections)}
-        ${renderInterventions(state.result)}
+        ${state.result.mode === "rewrite" ? renderJSpaceInjectionPanel(state.result.jspace_injections) : ""}
+        ${state.result.mode === "rewrite" ? renderInterventions(state.result) : ""}
         ${renderTokenInspector(inspectedFrame, state.result)}
         ${renderReadoutPanel(inspectedFrame ? [inspectedFrame] : visibleFrames)}
-      </div>
-    `;
-  }
-
-  if (state.customResult) {
-    return `
-      <div class="rail-stack">
-        ${renderModelStatePanel()}
-        ${renderJSpaceInjectionPanel(state.customResult.jspace_injections)}
-        ${renderTokenInspector(state.customResult.frame, state.customResult)}
-        ${renderReadoutPanel([state.customResult.frame])}
       </div>
     `;
   }
@@ -547,7 +476,6 @@ function renderModelStateRail(): string {
   return `
     <div class="rail-stack">
       ${renderModelStatePanel()}
-      ${renderJSpaceInjectionPanel([])}
       ${renderModelStateEmpty()}
     </div>
   `;
@@ -576,7 +504,7 @@ function renderRailSection(id: string, title: string, body: string, meta = ""): 
 }
 
 function renderModelStatePanel(): string {
-  const engine = state.health?.engine ?? state.result?.engine ?? state.customResult?.engine;
+  const engine = state.health?.engine ?? state.result?.engine;
   const lens = engine?.jacobian_lens;
   const runtime = engine?.mode === "hf" ? "Modal/Qwen" : (engine?.mode ?? "Loading");
   const lensSource = lens?.source ? `${lens.source}${lens.artifact ? ` / ${lens.artifact}` : ""}` : "Pending";
@@ -588,10 +516,10 @@ function renderModelStatePanel(): string {
         ${stateValueRow("Runtime", runtime)}
         ${stateValueRow("Model", engine?.model ?? "Qwen/Qwen3-1.7B")}
         ${stateValueRow("Readout", engine?.readout ?? "hidden-state")}
-        ${stateValueRow("J-Scope Lens", lensStatusText())}
+        ${stateValueRow("Anthropic J-lens", lensStatusText())}
         ${stateValueRow("Lens Pair", lensPairText())}
         ${stateValueRow("Lens Source", lensSource)}
-        ${stateValueRow("Layer", engine?.layer.toString() ?? "15")}
+        ${stateValueRow("Layer Policy", state.activeMode === "monitor" ? "All fitted" : `L${engine?.layer ?? 15}`)}
         ${stateValueRow("Device", engine?.device ?? "Modal GPU")}
         ${stateValueRow("Policy", policyLabel(), true)}
       </div>
@@ -603,7 +531,7 @@ function stateValueRow(label: string, value: string, emphasize = false): string 
   return `
     <div class="grid grid-cols-[92px_minmax(0,1fr)] items-center gap-2 border-b border-line px-3 py-2">
       <span class="text-neutral-500">${escapeHtml(label)}</span>
-      <span class="truncate text-right ${emphasize ? "font-semibold text-white" : "text-neutral-700"}" title="${escapeHtml(value)}">${escapeHtml(value)}</span>
+      <span class="truncate text-right ${emphasize ? "font-semibold text-ink" : "text-neutral-700"}" title="${escapeHtml(value)}">${escapeHtml(value)}</span>
     </div>
   `;
 }
@@ -611,24 +539,9 @@ function stateValueRow(label: string, value: string, emphasize = false): string 
 function renderModelStateEmpty(): string {
   return renderRailSection(
     "live-readout",
-    "Live Readout",
+    "J-lens Vocabulary",
     `
-      <div class="p-3">
-        <div class="grid items-center gap-1 text-xs text-neutral-500" style="grid-template-columns: 38px repeat(3, minmax(0, 1fr)) 50px;">
-          <span>step</span><span>risk</span><span>claim</span><span>brand</span><span>action</span>
-          ${Array.from({ length: 4 })
-            .map(
-              (_, index) => `
-                <span class="font-mono">${index}</span>
-                ${Array.from({ length: 3 })
-                  .map(() => `<span class="activation-cell" style="--score: 0.14; --cell-color: rgba(66,96,255,0.42);"></span>`)
-                  .join("")}
-                <span class="truncate text-neutral-400">idle</span>
-              `
-            )
-            .join("")}
-        </div>
-      </div>
+      <p class="p-3 text-xs leading-5 text-neutral-500">Run a prompt to decode each fitted layer into ranked vocabulary words.</p>
     `
   );
 }
@@ -678,10 +591,6 @@ function renderJSpaceInjection(injection: JSpaceInjection): string {
   `;
 }
 
-function isRunMode(mode: AppMode): mode is RunMode {
-  return mode === "monitor" || mode === "rewrite";
-}
-
 function tabButton(mode: AppMode, icon: string, label: string): string {
   const active = state.activeMode === mode;
   const collapsed = state.modeRailCollapsed;
@@ -695,8 +604,7 @@ function tabButton(mode: AppMode, icon: string, label: string): string {
     .join(" ");
   const descriptions: Record<AppMode, string> = {
     monitor: "Detect and kill unsafe latent trajectories.",
-    rewrite: "Apply activation edits during decoding.",
-    custom: "Generate concept lenses and compare readouts."
+    rewrite: "Apply activation edits during decoding."
   };
   return `
     <button data-tab="${mode}" class="${classes}" title="${escapeHtml(label)}" ${lockedAttr()}>
@@ -718,24 +626,27 @@ function renderScenarioButton(scenario: ScenarioPublic): string {
   return `
     <button data-scenario="${scenario.id}" class="scenario-row ${active ? "is-active" : ""} flex w-full items-center justify-between gap-4 px-3 py-2.5 text-left text-sm${lockedClass()}" ${lockedAttr()}>
       <span class="font-semibold">${escapeHtml(scenario.label)}</span>
-      <span class="shrink-0 text-right text-xs leading-4 text-neutral-600">${escapeHtml(scenario.action === "kill" ? "Tripwire threshold demo" : "Steering rewrite demo")}</span>
+      <span class="shrink-0 text-right text-xs leading-4 text-neutral-600">${escapeHtml(scenario.action === "kill" ? "J-lens rank filter" : "Steering rewrite demo")}</span>
     </button>
   `;
 }
 
 function renderMonitorControls(): string {
-  const concepts = state.profiles?.concepts ?? [];
+  const concepts = (state.profiles?.concepts ?? []).filter((concept) => concept.polarity === "risk");
   return `
     <div class="border-b border-line p-3">
       <div class="flex items-center justify-between gap-3">
-        <label class="text-xs font-semibold uppercase tracking-normal text-neutral-500">Tripwires</label>
+        <div>
+          <label class="text-xs font-semibold uppercase tracking-normal text-neutral-500">Unsafe word sets</label>
+          <p class="mt-0.5 text-xs text-neutral-500">Selected single-token words are checked against each layer's J-lens vocabulary ranking.</p>
+        </div>
         <div class="grid grid-cols-2 border border-line bg-field p-0.5 text-xs font-semibold">
           ${actionButton("kill", "Kill")}
           ${actionButton("observe", "Observe")}
         </div>
       </div>
-      <div class="mt-2 flex flex-wrap gap-1.5">
-        ${concepts.map(renderConceptChip).join("") || skeletonLine("Loading concepts")}
+      <div class="mt-2 grid border border-line md:grid-cols-2">
+        ${concepts.map(renderConceptFilter).join("") || skeletonLine("Loading unsafe word sets")}
       </div>
     </div>
   `;
@@ -750,20 +661,15 @@ function actionButton(action: MonitorAction, label: string): string {
   `;
 }
 
-function renderConceptChip(concept: ConceptPublic): string {
+function renderConceptFilter(concept: ConceptPublic): string {
   const selected = state.monitorIds.has(concept.id);
-  const tone =
-    concept.polarity === "risk"
-      ? selected
-      ? "border-hazard bg-red-50 text-hazard"
-      : "border-line bg-field text-neutral-700"
-      : selected
-        ? "border-signal bg-teal-50 text-signal"
-        : "border-line bg-field text-neutral-700";
   return `
-    <button data-concept="${concept.id}" class="inline-flex min-h-8 items-center gap-1.5 border px-2.5 py-1 text-xs font-semibold${lockedClass()} ${tone}" ${lockedAttr()}>
-      <span class="h-1.5 w-1.5 ${concept.polarity === "risk" ? "bg-hazard" : "bg-signal"}"></span>
-      ${escapeHtml(concept.label)}
+    <button data-concept="${concept.id}" class="min-w-0 border-b border-line px-3 py-2 text-left last:border-b-0 md:odd:border-r${lockedClass()} ${selected ? "bg-red-50" : "bg-white"}" aria-pressed="${String(selected)}" ${lockedAttr()}>
+      <span class="flex items-center gap-2 text-xs font-semibold ${selected ? "text-hazard" : "text-neutral-700"}">
+        <span class="grid h-3.5 w-3.5 shrink-0 place-items-center border ${selected ? "border-hazard bg-hazard text-white" : "border-line bg-white"}">${selected ? `<i data-lucide="check" class="h-2.5 w-2.5"></i>` : ""}</span>
+        ${escapeHtml(concept.label)}
+      </span>
+      <span class="mt-1 block truncate pl-[22px] text-[11px] text-neutral-500" title="${escapeHtml(concept.keywords.join(", "))}">${escapeHtml(concept.keywords.join(", "))}</span>
     </button>
   `;
 }
@@ -790,35 +696,6 @@ function renderProfileButton(profile: RewriteProfilePublic): string {
   `;
 }
 
-function renderCustomControls(): string {
-  return `
-    <div class="border-b border-line p-3">
-      <label class="text-xs font-semibold uppercase tracking-normal text-neutral-500">Generated Concepts</label>
-      <div class="mt-2 grid border border-line">
-        ${state.customConcepts.map(renderCustomConceptEditor).join("")}
-      </div>
-    </div>
-  `;
-}
-
-function renderCustomConceptEditor(concept: CustomConceptInput, index: number): string {
-  return `
-    <div class="custom-concept-row grid grid-cols-[minmax(0,1fr)_96px] gap-2 p-2">
-        <input data-custom-label="${index}" value="${escapeHtml(concept.label)}" aria-label="Concept ${index + 1} label" class="h-9 min-w-0 border border-line bg-white px-2 text-sm outline-none focus:border-ink${lockedClass()}" ${lockedAttr()} />
-        <select data-custom-polarity="${index}" aria-label="Concept ${index + 1} polarity" class="h-9 border border-line bg-white px-2 text-xs font-semibold outline-none focus:border-ink${lockedClass()}" ${lockedAttr()}>
-          ${polarityOption("target", concept.polarity)}
-          ${polarityOption("risk", concept.polarity)}
-          ${polarityOption("neutral", concept.polarity)}
-        </select>
-        <input data-custom-keywords="${index}" value="${escapeHtml(concept.keywords.join(", "))}" aria-label="Concept ${index + 1} keywords" class="col-span-2 h-9 w-full border border-line bg-white px-2 text-xs outline-none focus:border-ink${lockedClass()}" spellcheck="false" ${lockedAttr()} />
-    </div>
-  `;
-}
-
-function polarityOption(value: ConceptPolarity, current: ConceptPolarity): string {
-  return `<option value="${value}" ${value === current ? "selected" : ""}>${escapeHtml(value)}</option>`;
-}
-
 function rangeControl(id: "threshold" | "strength", label: string, value: number, min: number, max: number, step: number): string {
   return `
     <div class="run-parameter space-y-1.5">
@@ -832,7 +709,7 @@ function rangeControl(id: "threshold" | "strength", label: string, value: number
 }
 
 function numberControl(
-  id: "maxNewTokens" | "temperature" | "customWindowTokens",
+  id: "maxNewTokens" | "temperature" | "lensRankThreshold",
   label: string,
   value: number,
   min: number,
@@ -852,9 +729,6 @@ function skeletonLine(label: string): string {
 }
 
 function renderResults(): string {
-  if (state.activeMode === "custom") {
-    return renderCustomResults();
-  }
   if (!state.result) {
     return `
       <div class="border-b border-line p-3">
@@ -864,10 +738,10 @@ function renderResults(): string {
       ${renderStatsStrip([
         { label: "Status", value: "READY", tone: "text-ink" },
         { label: "Tokens", value: "—" },
-        { label: "Peak", value: "—" },
+        { label: state.activeMode === "monitor" ? "Best Rank" : "Peak", value: "—" },
         { label: "Latency", value: "—" },
-        { label: "Actions", value: "0" },
-        { label: "Lookups", value: "0" }
+        { label: state.activeMode === "monitor" ? "Matches" : "Actions", value: "0" },
+        { label: state.activeMode === "monitor" ? "Filters" : "Lookups", value: state.activeMode === "monitor" ? String(state.monitorIds.size) : "0" }
       ])}
       <div class="grid min-h-40 place-items-center p-6 text-center text-sm text-neutral-500">
         Run the prompt to populate the output stream and layer heatmap.
@@ -908,6 +782,18 @@ function renderRunStats(response: RunResponse): string {
     : response.status === "cancelled"
       ? "text-neutral-600"
       : "text-ink";
+  if (response.mode === "monitor") {
+    const matches = response.frames.flatMap((frame) => frame.layer_activations).filter((item) => item.rank !== null);
+    const bestRank = matches.length ? Math.min(...matches.map((item) => item.rank ?? Number.MAX_SAFE_INTEGER)) : null;
+    return renderStatsStrip([
+      { label: "Status", value: response.status.toUpperCase(), tone: statusTone },
+      { label: "Tokens", value: String(completionTokens) },
+      { label: "Best Rank", value: bestRank === null ? "—" : `#${bestRank}` },
+      { label: "Latency", value: `${response.metrics.latency_ms} ms` },
+      { label: "Matches", value: String(matches.length) },
+      { label: "Filters", value: String(state.monitorIds.size) }
+    ]);
+  }
   return renderStatsStrip([
     { label: "Status", value: response.status.toUpperCase(), tone: statusTone },
     { label: "Tokens", value: String(completionTokens) },
@@ -932,97 +818,6 @@ function renderStatsStrip(items: Array<{ label: string; value: string; tone?: st
         )
         .join("")}
     </dl>
-  `;
-}
-
-function renderCustomResults(): string {
-  if (!state.customResult) {
-    return `
-      <div class="border-b border-line p-3">
-        <div class="text-[10px] font-semibold uppercase tracking-normal text-neutral-500">Lens Summary</div>
-        <p class="mt-0.5 text-sm">Ready to compare the custom concept vectors with the matched J-Scope lens.</p>
-      </div>
-      ${renderStatsStrip([
-        { label: "Status", value: "READY", tone: "text-ink" },
-        { label: "Concepts", value: String(state.customConcepts.length) },
-        { label: "Peak", value: "—" },
-        { label: "Latency", value: "—" },
-        { label: "Lookups", value: "0" },
-        { label: "Lens Pair", value: lensPairText() }
-      ])}
-      <div class="grid min-h-40 place-items-center p-6 text-center text-sm text-neutral-500">
-        Generate the lens to populate concept scores and calibration details.
-      </div>
-    `;
-  }
-
-  const response = state.customResult;
-  return `
-    <div class="border-b border-line p-3">
-      <div class="text-[10px] font-semibold uppercase tracking-normal text-neutral-500">Lens Summary</div>
-      <p class="mt-0.5 text-sm">${escapeHtml(response.summary)}</p>
-    </div>
-    ${renderStatsStrip([
-      { label: "Status", value: "GENERATED", tone: "text-ink" },
-      { label: "Concepts", value: String(response.concepts.length) },
-      { label: "Peak", value: response.metrics.peak_score.toFixed(2) },
-      { label: "Latency", value: `${response.metrics.latency_ms} ms` },
-      { label: "Lookups", value: String(response.jspace_injections.length) },
-      { label: "Lens Pair", value: lensPairText() }
-    ])}
-    <div class="p-4">
-      <section class="grid gap-3 lg:grid-cols-2">
-        ${response.concepts.map(renderCustomLensCard).join("")}
-      </section>
-    </div>
-  `;
-}
-
-function renderCustomLensCard(concept: CustomConceptLens): string {
-  const dominant = concept.jacobian_score >= concept.proxy_score ? concept.jacobian_score : concept.proxy_score;
-  return `
-    <article class="border border-line bg-field p-3">
-      <div class="mb-2 flex items-start justify-between gap-3">
-        <div class="min-w-0">
-          <h3 class="truncate text-sm font-semibold">${escapeHtml(concept.label)}</h3>
-          <p class="font-mono text-[11px] text-neutral-500">delta ${concept.agreement_delta.toFixed(2)}</p>
-        </div>
-        <span class="border border-line bg-white px-1.5 py-0.5 text-[11px] font-semibold">${escapeHtml(concept.polarity)}</span>
-      </div>
-      <div class="mb-3 grid grid-cols-2 gap-2 text-xs">
-        ${miniScore("Proxy", concept.proxy_score, concept.polarity)}
-        ${miniScore("Jacobian", concept.jacobian_score, concept.polarity)}
-      </div>
-      <div class="mb-3 flex flex-wrap gap-1">
-        ${concept.keywords.map((keyword) => `<span class="border border-line bg-white px-1.5 py-0.5 text-[11px] text-neutral-600">${escapeHtml(keyword)}</span>`).join("")}
-      </div>
-      <div class="h-1.5 border border-line bg-white">
-        <div class="h-full ${concept.polarity === "risk" ? "bg-hazard" : "bg-signal"}" style="width: ${Math.round(dominant * 100)}%"></div>
-      </div>
-      <div class="mt-3 border-t border-line pt-2">
-        <div class="mb-1 text-[10px] font-semibold uppercase tracking-normal text-neutral-500">Calibration</div>
-        <div class="space-y-1">
-          ${concept.calibration_prompts
-            .slice(0, 3)
-            .map((prompt) => `<p class="text-[11px] leading-4 text-neutral-600">${escapeHtml(prompt)}</p>`)
-            .join("")}
-        </div>
-      </div>
-    </article>
-  `;
-}
-
-function miniScore(label: string, score: number, polarity: ConceptPolarity): string {
-  return `
-    <div class="border border-line bg-white p-2">
-      <div class="mb-1 flex items-center justify-between gap-2">
-        <span class="font-semibold text-neutral-500">${escapeHtml(label)}</span>
-        <span class="font-mono">${score.toFixed(2)}</span>
-      </div>
-      <div class="h-1.5 border border-line bg-field">
-        <div class="h-full ${polarity === "risk" ? "bg-hazard" : "bg-signal"}" style="width: ${Math.round(score * 100)}%"></div>
-      </div>
-    </div>
   `;
 }
 
@@ -1120,6 +915,7 @@ function renderActivationExplorer(
 ): string {
   const layers = activationLayers(frames);
   const selectedStep = selectedFrame?.step ?? frames.at(-1)?.step ?? 0;
+  const controlLayer = response.mode === "rewrite" ? response.engine.layer : -1;
   if (!frames.length || !layers.length) {
     return `
       <section class="border border-line bg-field p-4">
@@ -1134,12 +930,12 @@ function renderActivationExplorer(
       <div class="flex flex-col gap-2 border-b border-line bg-field px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h3 class="text-sm font-semibold">Layer Heatmap</h3>
-          <p class="text-xs text-neutral-500">${frames.length} token states across ${layers.length} layers</p>
+          <p class="text-xs text-neutral-500">${frames.length} token states across ${layers.length} fitted J-lens layers</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 text-[11px] font-semibold">
-          <span class="border border-line bg-white px-2 py-0.5">threshold ${state.threshold.toFixed(2)}</span>
-          <span class="border border-line bg-white px-2 py-0.5">control L${response.engine.layer}</span>
-          <span class="border border-hazard bg-red-50 px-2 py-0.5 text-hazard">tripwire</span>
+          <span class="border border-line bg-white px-2 py-0.5">top ${state.lensRankThreshold}</span>
+          <span class="border border-line bg-white px-2 py-0.5">Anthropic J-lens</span>
+          <span class="border border-hazard bg-red-50 px-2 py-0.5 text-hazard">unsafe word match</span>
         </div>
       </div>
       <div class="trace-scroll max-h-[560px] overflow-auto p-3">
@@ -1149,8 +945,8 @@ function renderActivationExplorer(
           ${layers
             .map(
               (layer) => `
-                <div class="heatmap-layer-label ${layer === response.engine.layer ? "is-control" : ""}">L${layer}</div>
-                ${frames.map((frame) => renderHeatmapCell(frame, layer, selectedStep, response.engine.layer)).join("")}
+                <div class="heatmap-layer-label ${layer === controlLayer ? "is-control" : ""}">L${layer}</div>
+                ${frames.map((frame) => renderHeatmapCell(frame, layer, selectedStep, controlLayer)).join("")}
               `
             )
             .join("")}
@@ -1210,9 +1006,9 @@ function renderHeatmapCell(
       data-frame-step="${frame.step}"
       class="${classes}"
       style="--score: ${activation.score}; --cell-color: ${cellColor(activation)};"
-      title="step ${frame.step} layer ${layer}: ${escapeHtml(activation.label)} ${activation.score.toFixed(2)}"
+      title="${escapeHtml(layerReadoutTitle(frame, activation))}"
     >
-      <span class="sr-only">${escapeHtml(activation.label)} ${activation.score.toFixed(2)}</span>
+      <span class="sr-only">${escapeHtml(layerReadoutTitle(frame, activation))}</span>
     </button>
   `;
 }
@@ -1225,7 +1021,9 @@ function renderTokenInspector(frame: TraceFrame | null, response: { engine: RunR
       `<p class="p-3 text-xs leading-5 text-neutral-500">Select a generated token to inspect its layer activations.</p>`
     );
   }
-  const strongest = [...(frame.layer_activations ?? [])].sort((left, right) => right.score - left.score).slice(0, 6);
+  const strongest = [...(frame.layer_activations ?? [])]
+    .sort((left, right) => (left.rank ?? Number.MAX_SAFE_INTEGER) - (right.rank ?? Number.MAX_SAFE_INTEGER) || right.score - left.score)
+    .slice(0, 6);
   const tripwires = strongest.filter(isTripwireActivation);
   return renderRailSection(
     "token-inspector",
@@ -1235,7 +1033,7 @@ function renderTokenInspector(frame: TraceFrame | null, response: { engine: RunR
         <div class="border-b border-line p-3">
           <div class="mb-1 flex items-center justify-between gap-3">
             <span class="font-mono text-xs text-neutral-500">step ${frame.step} / ${frame.phase}</span>
-            <span class="font-mono text-xs">L${response.engine.layer}</span>
+            <span class="font-mono text-xs">${frame.layer_activations.length} layers</span>
           </div>
           <div class="break-words text-sm font-semibold">${escapeHtml(tokenLabel(frame))}</div>
           ${frame.note ? `<p class="mt-2 text-xs leading-5 text-neutral-600">${escapeHtml(frame.note)}</p>` : ""}
@@ -1245,11 +1043,11 @@ function renderTokenInspector(frame: TraceFrame | null, response: { engine: RunR
           ${
             tripwires.length
               ? tripwires.map(renderLayerActivationRow).join("")
-              : `<div class="border-b border-line p-3 text-xs text-neutral-500">No risk layer crosses ${state.threshold.toFixed(2)} for this token.</div>`
+              : `<div class="border-b border-line p-3 text-xs text-neutral-500">No selected unsafe word appears in the top ${state.lensRankThreshold} for this token.</div>`
           }
         </div>
         <div>
-          <div class="border-b border-line px-3 py-2 text-xs font-semibold">Strongest Layers</div>
+          <div class="border-b border-line px-3 py-2 text-xs font-semibold">Layer Readouts</div>
           ${strongest.length ? strongest.map(renderLayerActivationRow).join("") : `<div class="p-3 text-xs text-neutral-500">No layer scan.</div>`}
         </div>
       </div>
@@ -1260,31 +1058,44 @@ function renderTokenInspector(frame: TraceFrame | null, response: { engine: RunR
 
 function renderLayerActivationRow(activation: LayerActivation): string {
   const tripwire = isTripwireActivation(activation);
+  const primary = activation.matched_token ?? activation.label;
   return `
     <div class="border-b border-line p-2 last:border-b-0 ${tripwire ? "bg-red-50" : ""}">
       <div class="mb-1 flex items-center justify-between gap-2">
         <span class="font-mono text-[11px] ${tripwire ? "text-hazard" : "text-neutral-500"}">L${activation.layer}</span>
-        <span class="font-mono text-[11px]">${activation.score.toFixed(2)}</span>
+        <span class="font-mono text-[11px]">${activation.rank === null ? "top words" : `rank #${activation.rank}`}</span>
       </div>
       <div class="mb-1.5 flex items-center justify-between gap-2">
-        <span class="truncate text-xs font-semibold">${escapeHtml(activation.label)}</span>
+        <span class="truncate text-xs font-semibold">${escapeHtml(primary)}</span>
         ${tripwire ? `<span class="border border-hazard bg-white px-1 py-0.5 text-[10px] font-semibold text-hazard">TRIP</span>` : ""}
       </div>
-      <div class="h-1.5 border border-line bg-field">
-        <div class="h-full ${activation.polarity === "risk" ? "bg-hazard" : "bg-signal"}" style="width: ${Math.round(activation.score * 100)}%"></div>
+      <div class="flex flex-wrap gap-1">
+        ${activation.top_tokens.map((token) => `<span class="border border-line bg-white px-1 py-0.5 text-[10px] text-neutral-500">${escapeHtml(token)}</span>`).join("")}
       </div>
     </div>
   `;
 }
 
+function layerReadoutTitle(frame: TraceFrame, activation: LayerActivation): string {
+  const topWords = activation.top_tokens.join(", ");
+  if (activation.rank !== null) {
+    return `step ${frame.step} layer ${activation.layer}: ${activation.label} matched ${activation.matched_token ?? "word"} at rank ${activation.rank}; top words: ${topWords}`;
+  }
+  return `step ${frame.step} layer ${activation.layer}: top words ${topWords}`;
+}
+
 function tokenLabel(frame: TraceFrame): string {
   if (frame.phase === "prompt") return "<prompt>";
   const token = frame.token || "";
+  if (!token && frame.action === "blocked") return "[blocked]";
   if (!token.trim()) return "[space]";
   return token.replace(/\s+/g, " ");
 }
 
-function isTripwireActivation(activation: Pick<LayerActivation | ConceptScore, "polarity" | "score">): boolean {
+function isTripwireActivation(activation: { polarity: ConceptPolarity; score: number; rank?: number | null }): boolean {
+  if ("rank" in activation) {
+    return activation.polarity === "risk" && activation.rank !== null && activation.rank !== undefined && activation.rank <= state.lensRankThreshold;
+  }
   return activation.polarity === "risk" && activation.score >= state.threshold;
 }
 
@@ -1331,6 +1142,32 @@ function renderInterventions(response: RunResponse): string {
 
 function renderReadoutPanel(frames: TraceFrame[]): string {
   const latest = frames.at(-1);
+  if (latest && latest.proxy_concepts.length === 0 && latest.layer_activations.length > 0) {
+    const readouts = [...latest.layer_activations]
+      .sort((left, right) => (left.rank ?? Number.MAX_SAFE_INTEGER) - (right.rank ?? Number.MAX_SAFE_INTEGER) || left.layer - right.layer)
+      .slice(0, 8);
+    const bestRank = readouts.find((item) => item.rank !== null)?.rank ?? null;
+    return renderRailSection(
+      "jlens-vocabulary",
+      "J-lens Vocabulary",
+      `<div class="divide-y divide-line">
+        ${readouts
+          .map(
+            (readout) => `<div class="p-2 ${isTripwireActivation(readout) ? "bg-red-50" : ""}">
+              <div class="mb-1 flex items-center justify-between gap-2">
+                <span class="font-mono text-[11px] text-neutral-500">L${readout.layer}</span>
+                <span class="font-mono text-[11px]">${readout.rank === null ? "clear" : `rank #${readout.rank}`}</span>
+              </div>
+              <div class="flex flex-wrap gap-1">
+                ${readout.top_tokens.map((token) => `<span class="border border-line bg-white px-1 py-0.5 text-[10px] ${readout.matched_token === token ? "font-semibold text-hazard" : "text-neutral-600"}">${escapeHtml(token)}</span>`).join("")}
+              </div>
+            </div>`
+          )
+          .join("")}
+      </div>`,
+      bestRank === null ? "Clear" : `Best #${bestRank}`
+    );
+  }
   const controlConcepts = latest?.top_concepts ?? [];
   const proxyConcepts = latest?.proxy_concepts?.length ? latest.proxy_concepts : controlConcepts;
   const jacobianConcepts = latest?.jacobian_concepts ?? [];
@@ -1433,14 +1270,9 @@ function bindEvents() {
     button.addEventListener("click", () => {
       const nextMode = button.dataset.tab as AppMode;
       state.activeMode = nextMode;
-      if (nextMode === "custom") {
-        if (!state.customResult && !state.prompt.includes("SOC 2")) state.prompt = CUSTOM_DEFAULT_PROMPT;
-      } else {
-        const firstScenario = state.profiles?.scenarios.find((scenario) => scenario.mode === nextMode);
-        if (firstScenario) applyScenario(firstScenario);
-      }
+      const firstScenario = state.profiles?.scenarios.find((scenario) => scenario.mode === nextMode);
+      if (firstScenario) applyScenario(firstScenario);
       state.result = null;
-      state.customResult = null;
       state.inspectedStep = null;
       render();
     });
@@ -1496,6 +1328,9 @@ function bindEvents() {
     state.threshold = Number((element as HTMLInputElement).value);
     render();
   });
+  bindInput("lensRankThreshold", (element) => {
+    state.lensRankThreshold = Number((element as HTMLInputElement).value);
+  });
   bindInput("strength", (element) => {
     state.strength = Number((element as HTMLInputElement).value);
     render();
@@ -1505,37 +1340,6 @@ function bindEvents() {
   });
   bindInput("temperature", (element) => {
     state.temperature = Number((element as HTMLInputElement).value);
-  });
-  bindInput("customWindowTokens", (element) => {
-    state.customWindowTokens = Number((element as HTMLInputElement).value);
-  });
-
-  document.querySelectorAll<HTMLInputElement>("[data-custom-label]").forEach((input) => {
-    input.addEventListener("input", () => {
-      const index = Number(input.dataset.customLabel);
-      if (Number.isInteger(index) && state.customConcepts[index]) {
-        state.customConcepts[index].label = input.value;
-      }
-    });
-  });
-
-  document.querySelectorAll<HTMLInputElement>("[data-custom-keywords]").forEach((input) => {
-    input.addEventListener("input", () => {
-      const index = Number(input.dataset.customKeywords);
-      if (Number.isInteger(index) && state.customConcepts[index]) {
-        state.customConcepts[index].keywords = splitKeywords(input.value);
-      }
-    });
-  });
-
-  document.querySelectorAll<HTMLSelectElement>("[data-custom-polarity]").forEach((select) => {
-    select.addEventListener("change", () => {
-      const index = Number(select.dataset.customPolarity);
-      if (Number.isInteger(index) && state.customConcepts[index]) {
-        state.customConcepts[index].polarity = select.value as ConceptPolarity;
-        render();
-      }
-    });
   });
 
   document.querySelector<HTMLButtonElement>("#run")?.addEventListener("click", run);
@@ -1601,6 +1405,7 @@ function applyScenario(scenario: ScenarioPublic) {
   state.prompt = scenario.prompt;
   state.action = scenario.action;
   state.threshold = scenario.threshold;
+  state.lensRankThreshold = scenario.lens_rank_threshold;
   if (scenario.monitor_ids?.length) {
     state.monitorIds = new Set(scenario.monitor_ids);
   }
@@ -1613,10 +1418,6 @@ function applyScenario(scenario: ScenarioPublic) {
 
 async function run() {
   if (state.loading) return;
-  if (state.activeMode === "custom") {
-    await runCustomLens();
-    return;
-  }
   const controller = new AbortController();
   activeRunController = controller;
   const payload = currentRunPayload();
@@ -1625,7 +1426,6 @@ async function run() {
   state.cancelRequested = false;
   state.error = null;
   state.result = createStreamingRun(payload);
-  state.customResult = null;
   state.inspectedStep = null;
   state.replayCount = 0;
   stopReplay();
@@ -1651,46 +1451,6 @@ async function run() {
   }
 }
 
-async function runCustomLens() {
-  if (state.loading) return;
-  const controller = new AbortController();
-  activeRunController = controller;
-  state.loading = true;
-  state.cancelRequested = false;
-  state.error = null;
-  state.result = null;
-  state.customResult = null;
-  state.inspectedStep = null;
-  stopReplay();
-  render();
-
-  try {
-    const result = await fetchJson<CustomLensResponse>("/api/custom-lens", {
-      method: "POST",
-      signal: controller.signal,
-      body: JSON.stringify({
-        prompt: state.prompt,
-        concepts: state.customConcepts.filter((concept) => concept.label.trim() && concept.keywords.length > 0),
-        window_tokens: state.customWindowTokens
-      })
-    });
-    state.customResult = result;
-    state.health = { ok: true, engine: result.engine };
-    state.inspectedStep = null;
-  } catch (error) {
-    state.error = isAbortError(error)
-      ? "Run cancelled."
-      : error instanceof Error
-        ? error.message
-        : "Custom lens failed";
-  } finally {
-    if (activeRunController === controller) activeRunController = null;
-    state.loading = false;
-    state.cancelRequested = false;
-    render();
-  }
-}
-
 function cancelRun() {
   if (!activeRunController || state.cancelRequested) return;
   state.cancelRequested = true;
@@ -1707,6 +1467,7 @@ function currentRunPayload(): RunRequestPayload {
     rewrite_profile_id: state.rewriteProfileId,
     action: state.action,
     threshold: state.threshold,
+    lens_rank_threshold: state.lensRankThreshold,
     max_new_tokens: state.maxNewTokens,
     temperature: state.temperature,
     strength: state.strength,
@@ -1882,14 +1643,6 @@ function isAbortError(error: unknown): boolean {
   return (
     error instanceof Error && error.name === "AbortError"
   ) || (typeof error === "object" && error !== null && "name" in error && error.name === "AbortError");
-}
-
-function splitKeywords(value: string): string[] {
-  return value
-    .split(/[,;\n]/)
-    .map((item) => item.trim())
-    .filter(Boolean)
-    .slice(0, 12);
 }
 
 function startReplay() {

@@ -40,6 +40,7 @@ class _VectorBank:
 class _JacobianLensRuntime:
     lens_model: Any
     matrices: dict[int, Any]
+    matrix_stack: Any
     source_layers: tuple[int, ...]
     source: str
     artifact: str
@@ -320,13 +321,17 @@ class HFJSpaceEngine:
             lens_model = jlens.from_hf(self.model, self.tokenizer, force_bos=False)
             parameter = next(self.model.parameters())
             source_layers = tuple(int(layer) for layer in lens.source_layers)
-            matrices = {
-                layer: lens.jacobians[layer].to(device=parameter.device, dtype=parameter.dtype)
-                for layer in source_layers
-            }
+            matrix_stack = self.torch.stack(
+                [
+                    lens.jacobians[layer].to(device=parameter.device, dtype=parameter.dtype)
+                    for layer in source_layers
+                ]
+            )
+            matrices = {layer: matrix_stack[index] for index, layer in enumerate(source_layers)}
             self.jacobian_lens = _JacobianLensRuntime(
                 lens_model=lens_model,
                 matrices=matrices,
+                matrix_stack=matrix_stack,
                 source_layers=source_layers,
                 source=self.lens_source,
                 artifact=self.lens_artifact,
@@ -471,10 +476,7 @@ class HFJSpaceEngine:
             mode="monitor",
             prompt=request.prompt,
             output=text,
-            summary=(
-                "Run completed with direct Anthropic J-lens vocabulary monitoring; "
-                "no unsafe word crossed the rank cutoff."
-            ),
+            summary=self._monitor_completion_summary(frames),
             engine=self.info(),
             frames=frames,
             metrics=RunMetrics(
@@ -584,10 +586,7 @@ class HFJSpaceEngine:
                 mode="monitor",
                 prompt=request.prompt,
                 output=text,
-                summary=(
-                    "Run completed with direct Anthropic J-lens vocabulary monitoring; "
-                    "no unsafe word crossed the rank cutoff."
-                ),
+                summary=self._monitor_completion_summary(frames),
                 engine=self.info(),
                 frames=frames,
                 metrics=RunMetrics(
@@ -1316,13 +1315,26 @@ class HFJSpaceEngine:
             raise RuntimeError("Anthropic Jacobian lens is required for monitoring but is unavailable.")
 
         policy_tokens = self._lens_policy_token_lookup(concept_ids)
+        residuals = self.torch.stack(
+            [
+                self._layer_vector(hidden_states[layer + 1], prompt_window=1)
+                for layer in self.jacobian_lens.source_layers
+            ]
+        ).to(
+            device=self.jacobian_lens.matrix_stack.device,
+            dtype=self.jacobian_lens.matrix_stack.dtype,
+        )
+        with self.torch.no_grad():
+            transported = self.torch.bmm(
+                residuals.unsqueeze(1),
+                self.jacobian_lens.matrix_stack.transpose(1, 2),
+            ).squeeze(1)
+            lens_logits = self._jacobian_logits(transported)
+        top_count = min(max(rank_threshold, 8), int(lens_logits.shape[-1]))
+        ranked_token_ids = self.torch.topk(lens_logits, k=top_count, dim=-1).indices.tolist()
+
         rows: list[LayerActivation] = []
-        for layer in self.jacobian_lens.source_layers:
-            hidden = self._layer_vector(hidden_states[layer + 1], prompt_window=1)
-            transported = self._transport_jacobian_residual(hidden, layer=layer)
-            logits = self._jacobian_logits(transported)
-            top_count = min(max(rank_threshold, 8), int(logits.numel()))
-            token_ids = self.torch.topk(logits, k=top_count).indices.tolist()
+        for layer, token_ids in zip(self.jacobian_lens.source_layers, ranked_token_ids, strict=True):
             top_tokens = self._decode_ranked_tokens(token_ids, limit=5)
 
             match: tuple[int, ConceptSpec, str, str] | None = None
@@ -1437,6 +1449,21 @@ class HFJSpaceEngine:
     @classmethod
     def _best_lens_match(cls, frame: TraceFrame) -> LayerActivation | None:
         return cls._best_ranked_readout(frame.layer_activations)
+
+    @classmethod
+    def _monitor_completion_summary(cls, frames: list[TraceFrame]) -> str:
+        matches = sum(
+            1
+            for frame in frames
+            for readout in frame.layer_activations
+            if readout.polarity == "risk" and readout.rank is not None
+        )
+        if matches:
+            return f"Observed {matches} unsafe Anthropic J-lens rank matches; generation was allowed to continue."
+        return (
+            "Run completed with direct Anthropic J-lens vocabulary monitoring; "
+            "no unsafe word crossed the rank cutoff."
+        )
 
     def _custom_layer_activation_scan(
         self,

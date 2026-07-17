@@ -1,20 +1,21 @@
 # J-Steer
 
-J-Steer is a demo control plane for monitoring and steering an open Qwen model through hidden-state interventions. It is designed to run on Modal by default: FastAPI serves the API and built HTML/Tailwind demo, while the model runs on a GPU-backed Modal function.
+J-Steer is a demo control plane for monitoring and steering an open Qwen model through hidden-state interventions. It runs on Modal by default: FastAPI serves the API and built HTML/Tailwind demo, while Qwen and its matched Jacobian lens run on a GPU-backed Modal function.
 
 ## What This Implements
 
-This repo now compares two latent readouts on an open Qwen model:
+The primary `Tripwire` path uses Anthropic's published `jlens` implementation and the pre-fitted Neuronpedia Qwen3-1.7B Jacobian lens directly:
 
-- `Proxy`: calibrated concept directions over mid-layer Qwen residual states. This is the editable control signal used for steering.
-- `Jacobian`: Anthropic's published `jlens` implementation with a pre-fitted Neuronpedia Qwen3-1.7B Jacobian lens. This transports the same residual into the final-layer basis, scores separately calibrated transported concept directions, and decodes top tokens/concept evidence.
-- `Control`: the proxy tripwire/steering score. The Jacobian lane is an independent readout for comparison, not a second kill switch.
+1. Capture the residual state at the prompt boundary and after each generated token.
+2. Transport every fitted source layer into the model's final residual basis with its published Jacobian matrix.
+3. Decode each transported residual with Qwen's normal unembedding to get a ranked vocabulary readout.
+4. Stop or flag the run when a selected unsafe token appears within the configured rank cutoff on any layer.
 
-The demo opens on `Custom Lens`, where a user generates concept directions from keywords and compares them against the published Qwen3-1.7B Jacobian lens. The other tabs show the same readout machinery in control modes: `Tripwire` kills concerning trajectories before unsafe text is released, and `Rewrite` applies forward-hook activation edits to move generation toward enterprise policy attractors. Run traces include a token-by-layer activation heatmap; hover a produced answer token, heatmap column, or heatmap cell to inspect the winning layer activations, highlighted tripwire layers, and Proxy/Jacobian readout for that token state.
+This monitor does not fit a custom concept lens and does not use the repo's calibrated concept vectors as a proxy kill switch. Unsafe word sets are policy groupings over exact Qwen tokenizer IDs. Keyword capitalization and leading-space variants are included when they each encode to one token; phrases that encode to multiple tokens are not direct filters.
 
-Rewrite profiles combine two controls: a hidden-state vector edit at the monitored layer and a decoder constraint that emits an approved control phrase. That keeps the demo crisp enough to record while still exposing the latent before/after trace.
+The older concept-vector implementation remains in `hf_engine.py` as prior art and powers the separate `Rewrite` demo. Rewrite profiles combine a hidden-state vector edit at the configured control layer with a decoder constraint that emits an approved phrase. The legacy `/api/custom-lens` endpoint also remains available for comparison experiments, but it is not exposed in the primary demo UI and is not used by `Tripwire`.
 
-The `Custom Lens` workflow lets a user provide concept names and keywords, then generates calibration prompts on the fly. It builds a user concept lens in raw residual space and a matching concept lens after the published Jacobian transport, so the demo can contrast "our generated lens" with the J-lens view of the same prompt window. This is not fitting a new Jacobian matrix; it is fitting lightweight concept directions on top of the model residual stream and the published J-space transport.
+Run traces include a token-by-layer J-lens heatmap. Hover a produced token, heatmap column, or cell to inspect the layer's top decoded words and any unsafe token rank that fired the tripwire.
 
 ## Sources
 
@@ -67,28 +68,22 @@ Defaults:
 - Jacobian lens target model: `Qwen/Qwen3-1.7B`
 - GPU: `L4`
 - Hugging Face cache volume: `j-steer-hf-cache`
-- Target layer: 58% through the decoder stack unless `JSTEER_LAYER` is set
+- Rewrite control layer: 58% through the decoder stack unless `JSTEER_LAYER` is set
 
 The J-lens matrix must match the exact model checkpoint. The runtime checks the configured target model (`JSTEER_JLENS_MODEL`), the lens artifact metadata (`hf_model_name` in `config.yaml` when present), and the lens hidden size before using the artifact. `Qwen/Qwen3-0.6B` has a different residual width and is not compatible with the published Qwen3-1.7B lens.
 
 ## Recording Script
 
-Use the deployed app URL and record these three beats:
+Use the deployed app URL and record these two beats:
 
-1. `Custom Lens` -> `Generate concepts and compare lens activations`
-   - Start on the default Custom Lens tab and run `Generate Lens`.
-   - Call out `Lens Pair: Matched`, which means the app is using Qwen/Qwen3-1.7B with the Qwen3-1.7B Jacobian lens artifact.
-   - The result shows generated calibration prompts, proxy scores, Jacobian-transported scores, and agreement deltas for each user concept.
-2. `Tripwire` -> `Catch hidden prompt injection in retrieved content`
+1. `Tripwire` -> `Kill credential exfiltration before output`
    - Run with `Kill`.
-   - The response should show `BLOCKED`, no released output, and a red tripwire band in the token-by-layer heatmap.
-   - Hover the prompt/token column to show the right-side token inspector and the `Proxy`/`Jacobian` readout for the selected state.
-3. `Rewrite` -> `Turn competitor drift into approved brand canon`
+   - The response shows `BLOCKED`, the exact matched unsafe word, its vocabulary rank, and the J-lens layer where it appeared.
+   - Hover the prompt column to inspect the top decoded words for every fitted layer and the highlighted tripwire rows.
+2. `Rewrite` -> `Turn competitor drift into approved brand canon`
    - Run with the default rewrite profile.
    - The raw path drifts into generic launch copy, while the steered path emits the approved HeliosCRM canon sentence and shows forward-hook interventions in the ledger.
-   - Hover tokens in the steered answer to highlight their activation columns and narrate where the editable proxy and Jacobian-lens decode agree or diverge.
-
-The intended framing is precise: control is performed with editable concept directions, while the published Jacobian lens is used as an independent J-space readout on the same residual stream.
+   - The distinction is explicit: the tripwire is a direct published J-lens rank filter, while rewrite is the retained experimental concept-vector controller.
 
 ## Development Checks
 
