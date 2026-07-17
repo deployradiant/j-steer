@@ -1,6 +1,5 @@
 import "./styles.css";
 import {
-  Activity,
   ChevronDown,
   GripVertical,
   LoaderCircle,
@@ -10,7 +9,6 @@ import {
   Play,
   RadioTower,
   RefreshCw,
-  ScanEye,
   ShieldAlert,
   WandSparkles,
   createIcons
@@ -364,7 +362,6 @@ function render() {
   bindEvents();
   createIcons({
     icons: {
-      Activity,
       ChevronDown,
       GripVertical,
       LoaderCircle,
@@ -374,7 +371,6 @@ function render() {
       Play,
       RadioTower,
       RefreshCw,
-      ScanEye,
       ShieldAlert,
       WandSparkles
     }
@@ -383,15 +379,6 @@ function render() {
 
 function engineLine(): string {
   return "Monitor Qwen activations, flag unsafe concepts, and compare custom concept lenses.";
-}
-
-function metricPill(label: string, value: string): string {
-  return `
-    <span class="inline-flex items-center gap-1 border border-line bg-white px-2.5 py-1">
-      <span class="text-neutral-500">${escapeHtml(label)}</span>
-      <span>${escapeHtml(value)}</span>
-    </span>
-  `;
 }
 
 function lensStatusText(): string {
@@ -869,32 +856,20 @@ function renderResults(): string {
   }
   if (!state.result) {
     return `
-      <div class="grid min-h-[320px] place-items-center p-6">
-        <div class="w-full max-w-3xl border border-line bg-field p-6">
-          <div class="mb-5 flex items-center gap-3">
-            <div class="flex h-11 w-11 items-center justify-center border border-line bg-white">
-              <i data-lucide="scan-eye" class="h-5 w-5"></i>
-            </div>
-            <div>
-              <h2 class="text-lg font-semibold">Ready</h2>
-              <p class="text-sm text-neutral-600">Modal/Qwen endpoint idle.</p>
-            </div>
-          </div>
-          <div class="activation-grid text-xs text-neutral-500">
-            <span>step</span><span>risk</span><span>claim</span><span>brand</span><span>tone</span><span>evidence</span><span>action</span>
-            ${Array.from({ length: 7 })
-              .map(
-                (_, index) => `
-                  <span class="font-mono">${index}</span>
-                  ${Array.from({ length: 5 })
-                    .map(() => `<span class="activation-cell" style="--score: 0.14; --cell-color: rgba(15,118,110,0.42);"></span>`)
-                    .join("")}
-                  <span class="text-neutral-400">observe</span>
-                `
-              )
-              .join("")}
-          </div>
-        </div>
+      <div class="border-b border-line p-3">
+        <div class="text-[10px] font-semibold uppercase tracking-normal text-neutral-500">Run Summary</div>
+        <p class="mt-0.5 text-sm">Ready to stream from Modal/Qwen.</p>
+      </div>
+      ${renderStatsStrip([
+        { label: "Status", value: "READY", tone: "text-ink" },
+        { label: "Tokens", value: "—" },
+        { label: "Peak", value: "—" },
+        { label: "Latency", value: "—" },
+        { label: "Actions", value: "0" },
+        { label: "Lookups", value: "0" }
+      ])}
+      <div class="grid min-h-40 place-items-center p-6 text-center text-sm text-neutral-500">
+        Run the prompt to populate the output stream and layer heatmap.
       </div>
     `;
   }
@@ -903,77 +878,97 @@ function renderResults(): string {
   const visibleFrames = response.frames.slice(0, state.replayCount);
   const inspectedFrame = selectedTraceFrame(visibleFrames);
   return `
-    <div class="border-b border-line p-4">
-      <div class="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
-        <div class="min-w-0">
-          <div class="mb-2 flex flex-wrap items-center gap-2">
-            ${statusBadge(response.status)}
-            ${metricPill("Latency", `${response.metrics.latency_ms} ms`)}
-            ${metricPill("Peak", response.metrics.peak_score.toFixed(2))}
-            ${metricPill("Rewrites", String(response.metrics.rewrites))}
-            ${metricPill("Lookups", String(response.jspace_injections.length))}
-          </div>
-          <h2 class="text-lg font-semibold">${escapeHtml(response.summary)}</h2>
-        </div>
-        <button id="replay" class="inline-flex h-9 items-center justify-center gap-2 border border-line bg-field px-3 text-sm font-semibold hover:border-ink">
-          <i data-lucide="refresh-cw" class="h-4 w-4"></i>
-          Replay
-        </button>
+    <div class="flex items-center justify-between gap-3 border-b border-line p-3">
+      <div class="min-w-0">
+        <div class="text-[10px] font-semibold uppercase tracking-normal text-neutral-500">Run Summary</div>
+        <p class="mt-0.5 truncate text-sm" title="${escapeHtml(response.summary)}">${escapeHtml(response.summary)}</p>
       </div>
+      <button id="replay" class="inline-flex h-8 shrink-0 items-center justify-center gap-2 border border-line bg-field px-2.5 text-xs font-semibold hover:border-ink">
+        <i data-lucide="refresh-cw" class="h-3.5 w-3.5"></i>
+        Replay
+      </button>
     </div>
+    ${renderRunStats(response)}
     <div class="space-y-4 p-4">
-      ${renderImpactPanel(response, visibleFrames)}
       ${renderStreamedOutput(response, visibleFrames, inspectedFrame)}
       ${renderActivationExplorer(response, visibleFrames, inspectedFrame)}
     </div>
   `;
 }
 
+function renderRunStats(response: RunResponse): string {
+  const completionTokens = Math.max(
+    response.metrics.completion_tokens,
+    response.frames.filter((frame) => frame.phase === "decode").length
+  );
+  const actions = response.frames.filter((frame) => frame.action !== "observe").length;
+  const statusTone = response.status === "blocked" || response.status === "error"
+    ? "text-hazard"
+    : response.status === "cancelled"
+      ? "text-neutral-600"
+      : "text-ink";
+  return renderStatsStrip([
+    { label: "Status", value: response.status.toUpperCase(), tone: statusTone },
+    { label: "Tokens", value: String(completionTokens) },
+    { label: "Peak", value: response.metrics.peak_score.toFixed(2) },
+    { label: "Latency", value: `${response.metrics.latency_ms} ms` },
+    { label: "Actions", value: String(actions || response.metrics.rewrites) },
+    { label: "Lookups", value: String(response.jspace_injections.length) }
+  ]);
+}
+
+function renderStatsStrip(items: Array<{ label: string; value: string; tone?: string }>): string {
+  return `
+    <dl class="run-stats">
+      ${items
+        .map(
+          (item) => `
+            <div class="run-stat">
+              <dt class="text-[10px] font-semibold uppercase tracking-normal text-neutral-500">${escapeHtml(item.label)}</dt>
+              <dd class="mt-0.5 truncate font-mono text-xs font-semibold ${item.tone ?? "text-neutral-700"}" title="${escapeHtml(item.value)}">${escapeHtml(item.value)}</dd>
+            </div>
+          `
+        )
+        .join("")}
+    </dl>
+  `;
+}
+
 function renderCustomResults(): string {
   if (!state.customResult) {
     return `
-      <div class="grid min-h-[320px] place-items-center p-6">
-        <div class="w-full max-w-3xl border border-line bg-field p-6">
-          <div class="mb-5 flex items-center gap-3">
-            <div class="flex h-11 w-11 items-center justify-center border border-line bg-white">
-              <i data-lucide="radio-tower" class="h-5 w-5"></i>
-            </div>
-            <div>
-              <h2 class="text-lg font-semibold">Custom Lens</h2>
-              <p class="text-sm text-neutral-600">Generate a concept lens, then compare it with the matched Qwen3-1.7B J-lens.</p>
-            </div>
-          </div>
-          <div class="grid gap-3 md:grid-cols-3">
-            ${state.customConcepts
-              .map(
-                (concept) => `
-                  <div class="border border-line bg-white p-3">
-                    <div class="mb-2 text-sm font-semibold">${escapeHtml(concept.label)}</div>
-                    <div class="flex flex-wrap gap-1">
-                      ${concept.keywords.map((keyword) => `<span class="border border-line bg-field px-1.5 py-0.5 text-[11px] text-neutral-600">${escapeHtml(keyword)}</span>`).join("")}
-                    </div>
-                  </div>
-                `
-              )
-              .join("")}
-          </div>
-        </div>
+      <div class="border-b border-line p-3">
+        <div class="text-[10px] font-semibold uppercase tracking-normal text-neutral-500">Lens Summary</div>
+        <p class="mt-0.5 text-sm">Ready to compare the custom concept vectors with the matched J-Scope lens.</p>
+      </div>
+      ${renderStatsStrip([
+        { label: "Status", value: "READY", tone: "text-ink" },
+        { label: "Concepts", value: String(state.customConcepts.length) },
+        { label: "Peak", value: "—" },
+        { label: "Latency", value: "—" },
+        { label: "Lookups", value: "0" },
+        { label: "Lens Pair", value: lensPairText() }
+      ])}
+      <div class="grid min-h-40 place-items-center p-6 text-center text-sm text-neutral-500">
+        Generate the lens to populate concept scores and calibration details.
       </div>
     `;
   }
 
   const response = state.customResult;
   return `
-    <div class="border-b border-line p-4">
-      <div class="mb-2 flex flex-wrap items-center gap-2">
-        ${metricPill("Latency", `${response.metrics.latency_ms} ms`)}
-        ${metricPill("Peak", response.metrics.peak_score.toFixed(2))}
-        ${metricPill("Concepts", String(response.concepts.length))}
-        ${metricPill("Lookups", String(response.jspace_injections.length))}
-        ${metricPill("Lens Pair", lensPairText())}
-      </div>
-      <h2 class="text-lg font-semibold">${escapeHtml(response.summary)}</h2>
+    <div class="border-b border-line p-3">
+      <div class="text-[10px] font-semibold uppercase tracking-normal text-neutral-500">Lens Summary</div>
+      <p class="mt-0.5 text-sm">${escapeHtml(response.summary)}</p>
     </div>
+    ${renderStatsStrip([
+      { label: "Status", value: "GENERATED", tone: "text-ink" },
+      { label: "Concepts", value: String(response.concepts.length) },
+      { label: "Peak", value: response.metrics.peak_score.toFixed(2) },
+      { label: "Latency", value: `${response.metrics.latency_ms} ms` },
+      { label: "Lookups", value: String(response.jspace_injections.length) },
+      { label: "Lens Pair", value: lensPairText() }
+    ])}
     <div class="p-4">
       <section class="grid gap-3 lg:grid-cols-2">
         ${response.concepts.map(renderCustomLensCard).join("")}
@@ -1030,65 +1025,6 @@ function miniScore(label: string, score: number, polarity: ConceptPolarity): str
   `;
 }
 
-function renderImpactPanel(response: RunResponse, frames: TraceFrame[]): string {
-  const latest = frames.at(-1) ?? response.frames.at(-1);
-  const top = latest?.top_concepts[0];
-  const topRisk = latest?.top_concepts.find((concept) => concept.polarity === "risk");
-  const topTarget = latest?.top_concepts.find((concept) => concept.polarity === "target");
-  const action =
-    response.status === "blocked"
-      ? "Stopped before first token"
-      : response.status === "running"
-        ? "Streaming token states"
-        : response.status === "cancelled"
-          ? "Cancelled by operator"
-      : response.status === "rewritten"
-        ? `${response.metrics.rewrites} latent edits`
-        : "Watched through decode";
-  const result =
-    response.status === "blocked"
-      ? "No unsafe completion released"
-      : response.status === "running"
-        ? "Partial response visible"
-        : response.status === "cancelled"
-          ? "Run stopped early"
-      : response.status === "rewritten"
-        ? "Enterprise policy attractor active"
-        : "Response allowed";
-  return `
-    <section class="grid gap-3 lg:grid-cols-3">
-      ${impactCard("Latent Concern", topRisk?.label ?? top?.label ?? "None", topRisk?.score ?? top?.score ?? 0, topRisk?.polarity ?? top?.polarity ?? "neutral")}
-      ${impactCard("Control Action", action, response.metrics.rewrites ? Math.min(1, response.metrics.rewrites / 12) : response.status === "blocked" ? 1 : 0.35, response.status === "blocked" ? "risk" : "target")}
-      ${impactCard("Enterprise Result", topTarget?.label ?? result, topTarget?.score ?? 0.8, "target")}
-    </section>
-  `;
-}
-
-function impactCard(label: string, value: string, score: number, polarity: ConceptPolarity): string {
-  const color = polarity === "risk" ? "bg-hazard" : polarity === "target" ? "bg-signal" : "bg-neutral-500";
-  return `
-    <article class="border border-line bg-field p-3">
-      <div class="mb-2 text-xs font-semibold uppercase tracking-normal text-neutral-500">${escapeHtml(label)}</div>
-      <div class="min-h-10 text-sm font-semibold leading-5">${escapeHtml(value)}</div>
-      <div class="mt-3 h-2 border border-line bg-white">
-        <div class="h-full ${color}" style="width: ${Math.round(Math.max(0.05, Math.min(1, score)) * 100)}%"></div>
-      </div>
-    </article>
-  `;
-}
-
-function statusBadge(status: RunStatus): string {
-  const styles: Record<RunStatus, string> = {
-    running: "border-violetless bg-sky-50 text-violetless",
-    completed: "border-signal bg-teal-50 text-signal",
-    blocked: "border-hazard bg-red-50 text-hazard",
-    rewritten: "border-violetless bg-sky-50 text-violetless",
-    cancelled: "border-line bg-field text-neutral-600",
-    error: "border-hazard bg-red-50 text-hazard"
-  };
-  return `<span class="inline-flex items-center gap-1 border px-2.5 py-1 text-xs font-semibold ${styles[status]}">${escapeHtml(status.toUpperCase())}</span>`;
-}
-
 function renderStreamedOutput(response: RunResponse, frames: TraceFrame[], selectedFrame: TraceFrame | null): string {
   const decodeFrames = response.frames.filter((frame) => frame.phase === "decode");
   const streamedTokens = Math.max(decodeFrames.length, response.metrics.completion_tokens);
@@ -1116,7 +1052,7 @@ function renderStreamedOutput(response: RunResponse, frames: TraceFrame[], selec
       <div class="border-b border-line bg-field p-3">
         <div class="mb-2 flex items-center justify-between gap-3">
           <div class="flex min-w-0 items-center gap-2">
-            ${statusBadge(response.status)}
+            <span class="run-status-dot ${progressTone}" aria-hidden="true"></span>
             <span class="truncate text-sm font-semibold">Output stream</span>
           </div>
           <span class="shrink-0 font-mono text-xs text-neutral-500">${escapeHtml(progressLabel)}</span>

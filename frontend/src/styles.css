@@ -267,6 +267,20 @@ select {
   min-width: 88px;
 }
 
+.run-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  border-bottom: 1px solid #d8d8d8;
+  background: #d8d8d8;
+}
+
+.run-stat {
+  min-width: 0;
+  padding: 8px 12px;
+  background: #ffffff;
+}
+
 .model-rail {
   min-height: calc(100vh - var(--app-header-height));
   position: relative;
@@ -372,6 +386,10 @@ select {
 
   .run-parameter-bar.is-custom {
     grid-template-columns: minmax(96px, 1fr) auto;
+  }
+
+  .run-stats {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .workspace-column {
@@ -525,13 +543,6 @@ input::placeholder {
   color: #9a9a9a;
 }
 
-.activation-grid {
-  display: grid;
-  grid-template-columns: 64px repeat(5, minmax(42px, 1fr)) 84px;
-  gap: 6px;
-  align-items: center;
-}
-
 .activation-cell {
   min-height: 24px;
   border: 1px solid #d8d8d8;
@@ -582,6 +593,21 @@ input::placeholder {
 }
 
 .run-progress.is-muted .run-progress-fill {
+  background: #8a8a8a;
+}
+
+.run-status-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  background: var(--primary-50);
+}
+
+.run-status-dot.is-hazard {
+  background: var(--flame-60);
+}
+
+.run-status-dot.is-muted {
   background: #8a8a8a;
 }
 
