@@ -339,7 +339,7 @@ function render() {
 
       <section
         class="workbench-grid grid"
-        style="--mode-rail-width: ${state.modeRailCollapsed ? 72 : 280}px; --model-rail-width: ${state.modelRailWidth}px;"
+        style="--mode-rail-width: ${state.modeRailCollapsed ? 52 : 280}px; --model-rail-width: ${state.modelRailWidth}px;"
       >
         <aside class="mode-rail min-w-0 border-r border-line bg-panel ${state.modeRailCollapsed ? "is-collapsed" : ""}">
           ${renderNavigationSidebar()}
