@@ -1,4 +1,5 @@
 from jsteer.hf_engine import HFJSpaceEngine
+from jsteer.schemas import LayerActivation, TraceFrame
 
 
 def test_model_id_guard_accepts_case_difference() -> None:
@@ -16,3 +17,42 @@ def test_lens_config_filename_uses_artifact_directory() -> None:
         )
         == "qwen3-1.7b/jlens/Salesforce-wikitext/config.yaml"
     )
+
+
+def test_direct_lens_match_prefers_best_vocabulary_rank() -> None:
+    readouts = [
+        LayerActivation(
+            layer=8,
+            concept_id="data_leakage",
+            label="Data Leakage",
+            score=0.6,
+            polarity="risk",
+            rank=26,
+            matched_token="private",
+            top_tokens=["private", "records"],
+        ),
+        LayerActivation(
+            layer=14,
+            concept_id="data_leakage",
+            label="Data Leakage",
+            score=0.9,
+            polarity="risk",
+            rank=4,
+            matched_token="leak",
+            top_tokens=["leak", "secret"],
+        ),
+    ]
+    frame = TraceFrame(
+        step=1,
+        phase="decode",
+        layer=14,
+        layer_activations=readouts,
+    )
+
+    match = HFJSpaceEngine._best_lens_match(frame)
+    scores = HFJSpaceEngine._lens_match_scores(readouts)
+
+    assert match is not None
+    assert (match.matched_token, match.rank, match.layer) == ("leak", 4, 14)
+    assert scores[0].label == "Data Leakage"
+    assert scores[0].evidence == ["leak", "L14 rank 4"]

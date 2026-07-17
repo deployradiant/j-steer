@@ -26,6 +26,9 @@ class LayerActivation(BaseModel):
     label: str
     score: float = Field(ge=0.0, le=1.0)
     polarity: ConceptPolarity = "neutral"
+    rank: int | None = Field(default=None, ge=1)
+    matched_token: str | None = None
+    top_tokens: list[str] = Field(default_factory=list)
 
 
 class JacobianLensInfo(BaseModel):
@@ -97,6 +100,7 @@ class RunRequest(BaseModel):
     rewrite_profile_id: str | None = None
     action: MonitorAction = "kill"
     threshold: float = Field(default=0.66, ge=0.05, le=0.99)
+    lens_rank_threshold: int = Field(default=64, ge=1, le=512)
     max_new_tokens: int = Field(default=90, ge=8, le=256)
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     top_p: float = Field(default=0.9, ge=0.05, le=1.0)
@@ -183,6 +187,7 @@ class ScenarioPublic(BaseModel):
     rewrite_profile_id: str | None = None
     action: MonitorAction = "kill"
     threshold: float = 0.66
+    lens_rank_threshold: int = Field(default=64, ge=1, le=512)
 
 
 class ProfilesResponse(BaseModel):

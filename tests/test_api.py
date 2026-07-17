@@ -42,12 +42,19 @@ def test_run_endpoint() -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "completed"
-    assert body["frames"][0]["proxy_concepts"]
-    assert body["frames"][0]["jacobian_concepts"]
+    assert body["frames"][0]["proxy_concepts"] == []
     assert body["frames"][0]["jacobian_tokens"]
     assert body["frames"][0]["layer_activations"]
     assert body["jspace_injections"] == []
-    assert {"layer", "label", "score", "polarity"}.issubset(body["frames"][0]["layer_activations"][0])
+    assert {
+        "layer",
+        "label",
+        "score",
+        "polarity",
+        "rank",
+        "matched_token",
+        "top_tokens",
+    }.issubset(body["frames"][0]["layer_activations"][0])
 
 
 def test_run_stream_endpoint() -> None:

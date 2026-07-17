@@ -39,7 +39,8 @@ class _VectorBank:
 @dataclass
 class _JacobianLensRuntime:
     lens_model: Any
-    matrix: Any
+    matrices: dict[int, Any]
+    source_layers: tuple[int, ...]
     source: str
     artifact: str
     target_model: str
@@ -63,13 +64,13 @@ class _CustomConceptVector:
 class HFJSpaceEngine:
     """Qwen hidden-state monitor and activation rewrite engine.
 
-    The control path uses calibrated concept directions because those directions are editable.
-    In parallel, the readout path decodes the same residual through Anthropic's published
-    Jacobian-lens implementation when a compatible Qwen lens artifact is configured.
+    Monitoring uses Anthropic's published Jacobian lens directly: each fitted layer is
+    transported into the final residual basis and decoded with Qwen's own unembedding.
+    The older editable concept-vector path remains available to the rewrite controller.
     """
 
     mode = "hf"
-    readout = "concept-vector control + Jacobian lens readout comparison"
+    readout = "Anthropic Jacobian lens vocabulary-rank filter"
 
     def __init__(self) -> None:
         self.model_name = os.getenv("JSTEER_MODEL", "Qwen/Qwen3-1.7B")
@@ -89,6 +90,7 @@ class HFJSpaceEngine:
         self.jacobian_lens: _JacobianLensRuntime | None = None
         self.jacobian_lens_error: str | None = None
         self._concept_token_cache: dict[str, list[int]] = {}
+        self._lens_filter_token_cache: dict[str, dict[int, str]] = {}
 
     def info(self) -> EngineInfo:
         return EngineInfo(
@@ -317,10 +319,15 @@ class HFJSpaceEngine:
 
             lens_model = jlens.from_hf(self.model, self.tokenizer, force_bos=False)
             parameter = next(self.model.parameters())
-            matrix = lens.jacobians[self.layer].to(device=parameter.device, dtype=parameter.dtype)
+            source_layers = tuple(int(layer) for layer in lens.source_layers)
+            matrices = {
+                layer: lens.jacobians[layer].to(device=parameter.device, dtype=parameter.dtype)
+                for layer in source_layers
+            }
             self.jacobian_lens = _JacobianLensRuntime(
                 lens_model=lens_model,
-                matrix=matrix,
+                matrices=matrices,
+                source_layers=source_layers,
                 source=self.lens_source,
                 artifact=self.lens_artifact,
                 target_model=self.lens_target_model,
@@ -360,6 +367,33 @@ class HFJSpaceEngine:
         directory = lens_artifact.rsplit("/", 1)[0] if "/" in lens_artifact else ""
         return f"{directory}/config.yaml" if directory else "config.yaml"
 
+    def _monitor_prompt_frame(
+        self,
+        hidden_states: Any,
+        monitor_ids: list[str],
+        rank_threshold: int,
+    ) -> TraceFrame:
+        layer_readouts = self._jlens_layer_readouts(hidden_states, monitor_ids, rank_threshold)
+        scores = self._lens_match_scores(layer_readouts)
+        control_readout = min(
+            layer_readouts,
+            key=lambda item: abs(item.layer - self.layer),
+            default=None,
+        )
+        return TraceFrame(
+            step=0,
+            phase="prompt",
+            layer=self.layer,
+            token="<prompt>",
+            top_concepts=scores,
+            proxy_concepts=[],
+            jacobian_concepts=scores,
+            jacobian_tokens=control_readout.top_tokens if control_readout else [],
+            layer_activations=layer_readouts,
+            action="observe",
+            note="Prompt boundary decoded directly through Anthropic's per-layer Jacobian lens.",
+        )
+
     def _run_monitor(self, request: RunRequest) -> RunResponse:
         assert self.model is not None and self.tokenizer is not None
         monitor_ids = request.monitor_ids or [
@@ -370,34 +404,17 @@ class HFJSpaceEngine:
         ]
         input_ids = self._encode_chat(request.prompt)
         outputs = self._forward(input_ids, output_hidden_states=True)
-        prompt_hidden_states = outputs.hidden_states[self.layer + 1][0]
-        prompt_scores, prompt_proxy, prompt_jacobian, prompt_jacobian_tokens = self._score_prompt_readouts(
-            prompt_hidden_states,
+        prompt_frame = self._monitor_prompt_frame(
+            outputs.hidden_states,
             monitor_ids,
+            request.lens_rank_threshold,
         )
-        peak_score = max((score.score for score in prompt_scores), default=0.0)
-        frames = [
-            TraceFrame(
-                step=0,
-                phase="prompt",
-                layer=self.layer,
-                token="<prompt>",
-                top_concepts=prompt_scores,
-                proxy_concepts=prompt_proxy,
-                jacobian_concepts=prompt_jacobian,
-                jacobian_tokens=prompt_jacobian_tokens,
-                layer_activations=self._layer_activation_scan(
-                    outputs.hidden_states,
-                    monitor_ids,
-                    prompt_window=min(4, int(prompt_hidden_states.shape[0])),
-                ),
-                action="observe",
-                note="Prompt boundary hidden state before the first decoded token.",
-            )
-        ]
-        if request.action == "kill" and peak_score >= request.threshold:
-            frames[0].action = "blocked"
-            frames[0].note = "Tripwire crossed before decoding."
+        peak_score = self._frame_peak(prompt_frame)
+        frames = [prompt_frame]
+        prompt_match = self._best_lens_match(prompt_frame)
+        if request.action == "kill" and prompt_match is not None:
+            prompt_frame.action = "blocked"
+            prompt_frame.note = "Unsafe vocabulary entered the Anthropic J-lens rank cutoff before decoding."
             return RunResponse(
                 id=str(uuid.uuid4()),
                 status="blocked",
@@ -405,8 +422,8 @@ class HFJSpaceEngine:
                 prompt=request.prompt,
                 output="",
                 summary=(
-                    f"Run killed before output: {prompt_scores[0].label} scored "
-                    f"{prompt_scores[0].score:.2f}."
+                    f"Run killed before output: {prompt_match.label} matched J-lens word "
+                    f"{prompt_match.matched_token!r} at rank {prompt_match.rank} on layer {prompt_match.layer}."
                 ),
                 engine=self.info(),
                 frames=frames,
@@ -425,12 +442,9 @@ class HFJSpaceEngine:
         )
         if request.action == "kill":
             for index, frame in enumerate(decode_frames):
-                frame_peak = self._frame_peak(frame)
-                if frame_peak >= request.threshold:
-                    frame.action = "blocked"
-                    frame.note = "Tripwire crossed during hidden-state decode monitoring."
+                match = self._best_lens_match(frame)
+                if frame.action == "blocked" and match is not None:
                     blocked_frames = frames + decode_frames[: index + 1]
-                    top = frame.top_concepts[0]
                     partial_text = frame.generated_text
                     return RunResponse(
                         id=str(uuid.uuid4()),
@@ -439,8 +453,8 @@ class HFJSpaceEngine:
                         prompt=request.prompt,
                         output=partial_text,
                         summary=(
-                            f"Run killed during decode: {top.label} reached "
-                            f"{top.score:.2f} at step {frame.step}."
+                            f"Run killed during decode: {match.label} matched J-lens word {match.matched_token!r} "
+                            f"at rank {match.rank} on layer {match.layer}, before step {frame.step}."
                         ),
                         engine=self.info(),
                         frames=blocked_frames,
@@ -457,7 +471,10 @@ class HFJSpaceEngine:
             mode="monitor",
             prompt=request.prompt,
             output=text,
-            summary="Run completed with J-space proxy monitoring enabled.",
+            summary=(
+                "Run completed with direct Anthropic J-lens vocabulary monitoring; "
+                "no unsafe word crossed the rank cutoff."
+            ),
             engine=self.info(),
             frames=frames,
             metrics=RunMetrics(
@@ -482,35 +499,18 @@ class HFJSpaceEngine:
         ]
         input_ids = self._encode_chat(request.prompt)
         outputs = self._forward(input_ids, output_hidden_states=True)
-        prompt_hidden_states = outputs.hidden_states[self.layer + 1][0]
-        prompt_scores, prompt_proxy, prompt_jacobian, prompt_jacobian_tokens = self._score_prompt_readouts(
-            prompt_hidden_states,
+        prompt_frame = self._monitor_prompt_frame(
+            outputs.hidden_states,
             monitor_ids,
+            request.lens_rank_threshold,
         )
-        peak_score = max((score.score for score in prompt_scores), default=0.0)
-        prompt_frame = TraceFrame(
-            step=0,
-            phase="prompt",
-            layer=self.layer,
-            token="<prompt>",
-            top_concepts=prompt_scores,
-            proxy_concepts=prompt_proxy,
-            jacobian_concepts=prompt_jacobian,
-            jacobian_tokens=prompt_jacobian_tokens,
-            layer_activations=self._layer_activation_scan(
-                outputs.hidden_states,
-                monitor_ids,
-                prompt_window=min(4, int(prompt_hidden_states.shape[0])),
-            ),
-            action="observe",
-            note="Prompt boundary hidden state before the first decoded token.",
-        )
+        peak_score = self._frame_peak(prompt_frame)
         frames = [prompt_frame]
 
-        if request.action == "kill" and peak_score >= request.threshold:
-            top = prompt_scores[0]
+        prompt_match = self._best_lens_match(prompt_frame)
+        if request.action == "kill" and prompt_match is not None:
             prompt_frame.action = "blocked"
-            prompt_frame.note = "Tripwire crossed before decoding."
+            prompt_frame.note = "Unsafe vocabulary entered the Anthropic J-lens rank cutoff before decoding."
             yield {"type": "frame", "frame": prompt_frame}
             yield {
                 "type": "done",
@@ -520,7 +520,10 @@ class HFJSpaceEngine:
                     mode="monitor",
                     prompt=request.prompt,
                     output="",
-                    summary=f"Run killed before output: {top.label} scored {top.score:.2f}.",
+                    summary=(
+                        f"Run killed before output: {prompt_match.label} matched J-lens word "
+                        f"{prompt_match.matched_token!r} at rank {prompt_match.rank} on layer {prompt_match.layer}."
+                    ),
                     engine=self.info(),
                     frames=frames,
                     metrics=RunMetrics(
@@ -543,12 +546,10 @@ class HFJSpaceEngine:
             steering=None,
         ):
             text = frame.generated_text
-            if request.action == "kill" and self._frame_peak(frame) >= request.threshold:
-                frame.action = "blocked"
-                frame.note = "Tripwire crossed during hidden-state decode monitoring."
+            match = self._best_lens_match(frame)
+            if request.action == "kill" and frame.action == "blocked" and match is not None:
                 frames.append(frame)
                 yield {"type": "frame", "frame": frame}
-                top = frame.top_concepts[0]
                 yield {
                     "type": "done",
                     "response": RunResponse(
@@ -557,7 +558,10 @@ class HFJSpaceEngine:
                         mode="monitor",
                         prompt=request.prompt,
                         output=text,
-                        summary=f"Run killed during decode: {top.label} reached {top.score:.2f} at step {frame.step}.",
+                        summary=(
+                            f"Run killed during decode: {match.label} matched J-lens word {match.matched_token!r} "
+                            f"at rank {match.rank} on layer {match.layer}, before step {frame.step}."
+                        ),
                         engine=self.info(),
                         frames=frames,
                         metrics=RunMetrics(
@@ -580,7 +584,10 @@ class HFJSpaceEngine:
                 mode="monitor",
                 prompt=request.prompt,
                 output=text,
-                summary="Run completed with J-space proxy monitoring enabled.",
+                summary=(
+                    "Run completed with direct Anthropic J-lens vocabulary monitoring; "
+                    "no unsafe word crossed the rank cutoff."
+                ),
                 engine=self.info(),
                 frames=frames,
                 metrics=RunMetrics(
@@ -763,7 +770,40 @@ class HFJSpaceEngine:
                     )
                 past_key_values = outputs.past_key_values
                 hidden = outputs.hidden_states[self.layer + 1][0, -1, :]
-                scores, proxy_scores, jacobian_scores, jacobian_tokens = self._score_readouts(hidden, monitor_ids)
+                if request.mode == "monitor":
+                    layer_readouts = self._jlens_layer_readouts(
+                        outputs.hidden_states,
+                        monitor_ids,
+                        request.lens_rank_threshold,
+                    )
+                    scores = self._lens_match_scores(layer_readouts)
+                    proxy_scores: list[ConceptScore] = []
+                    jacobian_scores = scores
+                    control_readout = min(
+                        layer_readouts,
+                        key=lambda item: abs(item.layer - self.layer),
+                        default=None,
+                    )
+                    jacobian_tokens = control_readout.top_tokens if control_readout else []
+                    if request.action == "kill" and step > 0 and self._best_ranked_readout(layer_readouts) is not None:
+                        yield TraceFrame(
+                            step=step + 1,
+                            phase="decode",
+                            layer=self.layer,
+                            token="",
+                            generated_text=self.tokenizer.decode(generated_ids, skip_special_tokens=True),
+                            top_concepts=scores,
+                            proxy_concepts=[],
+                            jacobian_concepts=scores,
+                            jacobian_tokens=jacobian_tokens,
+                            layer_activations=layer_readouts,
+                            action="blocked",
+                            note="Unsafe vocabulary entered the Anthropic J-lens rank cutoff before the next token.",
+                        )
+                        return
+                else:
+                    scores, proxy_scores, jacobian_scores, jacobian_tokens = self._score_readouts(hidden, monitor_ids)
+                    layer_readouts = self._layer_activation_scan(outputs.hidden_states, monitor_ids)
                 logits = outputs.logits[:, -1, :]
                 if state is not None:
                     logits = self._apply_control_phrase_bias(logits, state, generated_ids)
@@ -784,7 +824,7 @@ class HFJSpaceEngine:
                     proxy_concepts=proxy_scores,
                     jacobian_concepts=jacobian_scores,
                     jacobian_tokens=jacobian_tokens,
-                    layer_activations=self._layer_activation_scan(outputs.hidden_states, monitor_ids),
+                    layer_activations=layer_readouts,
                     action=action,
                     note=(
                         "Forward hook edited hidden state; decoder readout favored approved terms."
@@ -1265,6 +1305,139 @@ class HFJSpaceEngine:
                 rows.append(activation.model_copy(update={"layer": layer_index}))
         return rows
 
+    def _jlens_layer_readouts(
+        self,
+        hidden_states: Any,
+        concept_ids: list[str],
+        rank_threshold: int,
+    ) -> list[LayerActivation]:
+        """Decode every fitted layer and mark policy words by vocabulary rank."""
+        if self.jacobian_lens is None or self.torch is None:
+            raise RuntimeError("Anthropic Jacobian lens is required for monitoring but is unavailable.")
+
+        policy_tokens = self._lens_policy_token_lookup(concept_ids)
+        rows: list[LayerActivation] = []
+        for layer in self.jacobian_lens.source_layers:
+            hidden = self._layer_vector(hidden_states[layer + 1], prompt_window=1)
+            transported = self._transport_jacobian_residual(hidden, layer=layer)
+            logits = self._jacobian_logits(transported)
+            top_count = min(max(rank_threshold, 8), int(logits.numel()))
+            token_ids = self.torch.topk(logits, k=top_count).indices.tolist()
+            top_tokens = self._decode_ranked_tokens(token_ids, limit=5)
+
+            match: tuple[int, ConceptSpec, str, str] | None = None
+            for rank, token_id in enumerate(token_ids, start=1):
+                policy = policy_tokens.get(int(token_id))
+                if policy is None:
+                    continue
+                concept, policy_term = policy
+                decoded = self.tokenizer.decode([token_id], skip_special_tokens=True).strip() or policy_term
+                match = (rank, concept, policy_term, decoded)
+                break
+
+            if match is None:
+                rows.append(
+                    LayerActivation(
+                        layer=layer,
+                        concept_id="jlens_readout",
+                        label=top_tokens[0] if top_tokens else "No readable token",
+                        score=0.0,
+                        polarity="neutral",
+                        top_tokens=top_tokens,
+                    )
+                )
+                continue
+
+            rank, concept, policy_term, decoded = match
+            rows.append(
+                LayerActivation(
+                    layer=layer,
+                    concept_id=concept.id,
+                    label=concept.label,
+                    score=round((rank_threshold - rank + 1) / rank_threshold, 3),
+                    polarity=concept.polarity,
+                    rank=rank,
+                    matched_token=decoded,
+                    top_tokens=list(dict.fromkeys([decoded, *top_tokens]))[:5],
+                )
+            )
+        return rows
+
+    def _lens_policy_token_lookup(self, concept_ids: list[str]) -> dict[int, tuple[ConceptSpec, str]]:
+        lookup: dict[int, tuple[ConceptSpec, str]] = {}
+        for concept_id in concept_ids:
+            concept = CONCEPTS.get(concept_id)
+            if concept is None or concept.polarity != "risk":
+                continue
+            for token_id, term in self._single_token_policy_terms(concept).items():
+                lookup.setdefault(token_id, (concept, term))
+        return lookup
+
+    def _single_token_policy_terms(self, concept: ConceptSpec) -> dict[int, str]:
+        assert self.tokenizer is not None
+        cached = self._lens_filter_token_cache.get(concept.id)
+        if cached is not None:
+            return cached
+
+        token_ids: dict[int, str] = {}
+        for keyword in concept.keywords:
+            term = keyword.strip()
+            if not term:
+                continue
+            variants = (term, f" {term}", term.capitalize(), f" {term.capitalize()}", term.upper(), f" {term.upper()}")
+            for variant in variants:
+                encoded = self.tokenizer.encode(variant, add_special_tokens=False)
+                if len(encoded) == 1:
+                    token_ids.setdefault(int(encoded[0]), term)
+        self._lens_filter_token_cache[concept.id] = token_ids
+        return token_ids
+
+    def _decode_ranked_tokens(self, token_ids: list[int], limit: int) -> list[str]:
+        assert self.tokenizer is not None
+        tokens: list[str] = []
+        for token_id in token_ids:
+            token = self.tokenizer.decode([token_id], skip_special_tokens=True).strip()
+            if not token or token in tokens:
+                continue
+            tokens.append(token)
+            if len(tokens) >= limit:
+                break
+        return tokens
+
+    @staticmethod
+    def _lens_match_scores(layer_readouts: list[LayerActivation]) -> list[ConceptScore]:
+        strongest: dict[str, tuple[LayerActivation, list[str]]] = {}
+        for readout in layer_readouts:
+            if readout.rank is None or readout.polarity != "risk":
+                continue
+            current = strongest.get(readout.concept_id)
+            evidence = [readout.matched_token or readout.label, f"L{readout.layer} rank {readout.rank}"]
+            if current is None or readout.rank < (current[0].rank or 10**9):
+                strongest[readout.concept_id] = (readout, evidence)
+        return sorted(
+            [
+                ConceptScore(
+                    id=readout.concept_id,
+                    label=readout.label,
+                    score=readout.score,
+                    polarity=readout.polarity,
+                    evidence=evidence,
+                )
+                for readout, evidence in strongest.values()
+            ],
+            key=lambda item: item.score,
+            reverse=True,
+        )
+
+    @staticmethod
+    def _best_ranked_readout(readouts: list[LayerActivation]) -> LayerActivation | None:
+        matches = [readout for readout in readouts if readout.rank is not None]
+        return min(matches, key=lambda item: item.rank or 10**9, default=None)
+
+    @classmethod
+    def _best_lens_match(cls, frame: TraceFrame) -> LayerActivation | None:
+        return cls._best_ranked_readout(frame.layer_activations)
+
     def _custom_layer_activation_scan(
         self,
         hidden_states: Any,
@@ -1356,25 +1529,28 @@ class HFJSpaceEngine:
             )
         return sorted(scores, key=lambda item: item.score, reverse=True)[:5]
 
-    def _transport_jacobian_residual(self, residual: Any) -> Any:
+    def _transport_jacobian_residual(self, residual: Any, layer: int | None = None) -> Any:
         assert self.jacobian_lens is not None and self.torch is not None
         original_shape = tuple(residual.shape)
+        source_layer = self.layer if layer is None else layer
+        matrix = self.jacobian_lens.matrices[source_layer]
         with self.torch.no_grad():
             residual_batch = residual.detach().reshape(-1, original_shape[-1]).to(
-                device=self.jacobian_lens.matrix.device,
-                dtype=self.jacobian_lens.matrix.dtype,
+                device=matrix.device,
+                dtype=matrix.dtype,
             )
-            transported = residual_batch @ self.jacobian_lens.matrix.T
+            transported = residual_batch @ matrix.T
         if len(original_shape) == 1:
             return transported[0].float()
         return transported.reshape(*original_shape[:-1], transported.shape[-1]).float()
 
     def _jacobian_logits(self, transported: Any) -> Any:
         assert self.jacobian_lens is not None and self.torch is not None
+        matrix = self.jacobian_lens.matrices[self.layer]
         with self.torch.no_grad():
             residual_batch = transported.detach().reshape(-1, transported.shape[-1]).to(
-                device=self.jacobian_lens.matrix.device,
-                dtype=self.jacobian_lens.matrix.dtype,
+                device=matrix.device,
+                dtype=matrix.dtype,
             )
             logits = self.jacobian_lens.lens_model.unembed(residual_batch).detach().float().cpu()
         return logits[0] if logits.shape[0] == 1 else logits

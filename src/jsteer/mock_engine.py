@@ -32,7 +32,7 @@ class MockJSpaceEngine:
     mode = "mock"
     model = "mock-qwen3-jspace-proxy"
     layer = 15
-    readout = "deterministic concept simulator"
+    readout = "deterministic Jacobian-lens rank simulator"
     device = "local"
 
     def info(self) -> EngineInfo:
@@ -179,14 +179,16 @@ class MockJSpaceEngine:
             token="<prompt>",
             scores=prompt_scores,
             action="observe",
-            note="Prompt hidden state projected through the configured concept bank.",
+            note="Prompt boundary decoded through the mock per-layer Jacobian lens.",
+            direct_lens=True,
+            rank_threshold=request.lens_rank_threshold,
         )
         peak_score = self._frame_peak(prompt_frame)
+        prompt_match = self._best_lens_match(prompt_frame)
 
-        if request.action == "kill" and peak_score >= request.threshold:
-            top = prompt_scores[0]
+        if request.action == "kill" and prompt_match is not None:
             prompt_frame.action = "blocked"
-            prompt_frame.note = f"Tripwire crossed for {top.label} before the first decoded token."
+            prompt_frame.note = "Unsafe vocabulary entered the mock J-lens rank cutoff before decoding."
             return RunResponse(
                 id=str(uuid.uuid4()),
                 status="blocked",
@@ -194,8 +196,8 @@ class MockJSpaceEngine:
                 prompt=request.prompt,
                 output="",
                 summary=(
-                    f"Run killed at the prompt boundary: {top.label} reached "
-                    f"{top.score:.2f} against a {request.threshold:.2f} threshold."
+                    f"Run killed at the prompt boundary: {prompt_match.label} matched J-lens word "
+                    f"{prompt_match.matched_token!r} at rank {prompt_match.rank} on layer {prompt_match.layer}."
                 ),
                 engine=self.info(),
                 frames=[prompt_frame],
@@ -214,28 +216,25 @@ class MockJSpaceEngine:
             generated = f"{generated} {token}".strip()
             drift = max(0.0, peak_score - idx * 0.025)
             frame_scores = self._decayed_scores(prompt_scores, drift)
-            action = "observe"
             note = "Risk decays as the answer stays in the approved response lane."
-            if (
-                request.action == "kill"
-                and max((score.score for score in frame_scores), default=0.0) >= request.threshold
-            ):
-                action = "blocked"
-                note = "Tripwire crossed during hidden-state decode monitoring."
-            frames.append(
-                self._trace_frame(
-                    step=idx,
-                    phase="decode",
-                    layer=self.layer,
-                    token=token,
-                    generated_text=generated,
-                    scores=frame_scores,
-                    action=action,
-                    note=note,
-                )
+            frame = self._trace_frame(
+                step=idx,
+                phase="decode",
+                layer=self.layer,
+                token=token,
+                generated_text=generated,
+                scores=frame_scores,
+                action="observe",
+                note=note,
+                direct_lens=True,
+                rank_threshold=request.lens_rank_threshold,
             )
-            if action == "blocked":
-                top = frame_scores[0]
+            match = self._best_lens_match(frame)
+            if request.action == "kill" and match is not None:
+                frame.action = "blocked"
+                frame.note = "Unsafe vocabulary entered the mock J-lens rank cutoff during decoding."
+            frames.append(frame)
+            if frame.action == "blocked" and match is not None:
                 return RunResponse(
                     id=str(uuid.uuid4()),
                     status="blocked",
@@ -243,8 +242,8 @@ class MockJSpaceEngine:
                     prompt=request.prompt,
                     output=generated,
                     summary=(
-                        f"Run killed during decode: {top.label} reached "
-                        f"{top.score:.2f} at step {idx}."
+                        f"Run killed during decode: {match.label} matched J-lens word {match.matched_token!r} "
+                        f"at rank {match.rank} on layer {match.layer}, at step {idx}."
                     ),
                     engine=self.info(),
                     frames=frames,
@@ -459,19 +458,28 @@ class MockJSpaceEngine:
         generated_text: str = "",
         action: str = "observe",
         note: str | None = None,
+        direct_lens: bool = False,
+        rank_threshold: int = 64,
     ) -> TraceFrame:
         jacobian_scores = self._mock_jacobian_scores(scores)
+        layer_activations = self._mock_layer_activations(
+            scores,
+            step=step,
+            rank_threshold=rank_threshold if direct_lens else None,
+        )
+        matched_ids = {item.concept_id for item in layer_activations if item.rank is not None}
+        direct_scores = [score for score in jacobian_scores if score.id in matched_ids]
         return TraceFrame(
             step=step,
             phase=phase,
             layer=layer,
             token=token,
             generated_text=generated_text,
-            top_concepts=self._fuse_mock_scores(scores, jacobian_scores),
-            proxy_concepts=scores,
-            jacobian_concepts=jacobian_scores,
+            top_concepts=direct_scores if direct_lens else self._fuse_mock_scores(scores, jacobian_scores),
+            proxy_concepts=[] if direct_lens else scores,
+            jacobian_concepts=direct_scores if direct_lens else jacobian_scores,
             jacobian_tokens=self._mock_jacobian_tokens(jacobian_scores),
-            layer_activations=self._mock_layer_activations(scores, step=step),
+            layer_activations=layer_activations,
             action=action,
             note=note,
         )
@@ -667,7 +675,12 @@ class MockJSpaceEngine:
                 boosted.append(score)
         return sorted(boosted, key=lambda item: item.score, reverse=True)[:5]
 
-    def _mock_layer_activations(self, scores: list[ConceptScore], step: int) -> list[LayerActivation]:
+    def _mock_layer_activations(
+        self,
+        scores: list[ConceptScore],
+        step: int,
+        rank_threshold: int | None = None,
+    ) -> list[LayerActivation]:
         rows: list[LayerActivation] = []
         if not scores:
             return rows
@@ -684,18 +697,30 @@ class MockJSpaceEngine:
                 band = math.exp(-abs(layer - center) / 7.5)
                 wave = 0.025 * math.sin((step + 1) * (layer + 1) * (index + 1))
                 value = max(0.04, min(0.99, score.score * (0.34 + 0.66 * band) + wave))
+                is_match = rank_threshold is not None and score.polarity == "risk" and value >= 0.5
+                rank = max(1, round((1.0 - value) * rank_threshold)) if is_match else None
+                matched_token = score.evidence[0].split()[0] if is_match and score.evidence else None
+                top_tokens = list(dict.fromkeys([*(score.evidence[:3]), "review", "policy"]))[:5]
                 candidate = LayerActivation(
                     layer=layer,
                     concept_id=score.id,
                     label=score.label,
                     score=round(value, 3),
                     polarity=score.polarity,
+                    rank=rank,
+                    matched_token=matched_token,
+                    top_tokens=top_tokens,
                 )
                 if best is None or candidate.score > best.score:
                     best = candidate
             if best is not None:
                 rows.append(best)
         return rows
+
+    @staticmethod
+    def _best_lens_match(frame: TraceFrame) -> LayerActivation | None:
+        matches = [item for item in frame.layer_activations if item.rank is not None]
+        return min(matches, key=lambda item: item.rank or 10**9, default=None)
 
     def _mock_jacobian_scores(self, scores: list[ConceptScore]) -> list[ConceptScore]:
         jacobian_scores: list[ConceptScore] = []

@@ -22,11 +22,11 @@ def test_monitor_blocks_credential_prompt() -> None:
 
 def test_monitor_preserves_partial_output_when_decode_is_blocked(monkeypatch) -> None:
     engine = MockJSpaceEngine()
-    original_frame_peak = engine._frame_peak
+    original_best_lens_match = engine._best_lens_match
     monkeypatch.setattr(
         engine,
-        "_frame_peak",
-        lambda frame: 0.0 if frame.phase == "prompt" else original_frame_peak(frame),
+        "_best_lens_match",
+        lambda frame: None if frame.phase == "prompt" else original_best_lens_match(frame),
     )
     monkeypatch.setattr(engine, "_decayed_scores", lambda scores, _drift: scores)
 
