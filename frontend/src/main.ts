@@ -447,9 +447,13 @@ function renderPromptWorkspace(): string {
   return `
     <section class="border border-line bg-panel shadow-crisp">
       ${renderScenarioPicker()}
-      <div class="space-y-4 p-4">
-        <label for="prompt" class="sr-only">Prompt</label>
-        <textarea id="prompt" class="h-48 w-full resize-none border border-line bg-field px-3 py-3 text-sm leading-6 outline-none focus:border-ink lg:h-56${lockedClass()}" spellcheck="false" ${lockedAttr()}>${escapeHtml(state.prompt)}</textarea>
+      ${renderPolicyControls()}
+      <div class="p-3">
+        <div class="mb-2 flex items-center justify-between gap-3">
+          <label for="prompt" class="text-xs font-semibold uppercase tracking-normal text-neutral-500">Prompt</label>
+          <span class="font-mono text-[11px] text-neutral-500">${state.prompt.length} chars</span>
+        </div>
+        <textarea id="prompt" class="h-28 w-full resize-none border border-line bg-field px-3 py-2.5 text-sm leading-6 outline-none focus:border-ink lg:h-32${lockedClass()}" spellcheck="false" ${lockedAttr()}>${escapeHtml(state.prompt)}</textarea>
         ${renderRunControls()}
       </div>
     </section>
@@ -469,7 +473,7 @@ function renderScenarioPicker(): string {
       ? renderCustomScenarioButton()
       : scenarios.map(renderScenarioButton).join("") || skeletonLine("Loading scenarios");
   return `
-    <div class="border-b border-line bg-field p-4">
+    <div class="border-b border-line bg-field p-3">
       <div class="mb-2 flex items-center justify-between gap-3">
         <div class="text-xs font-semibold uppercase tracking-normal text-neutral-500">Scenarios</div>
         <span class="text-xs text-neutral-500">${escapeHtml(policyLabel())}</span>
@@ -482,42 +486,41 @@ function renderScenarioPicker(): string {
 }
 
 function renderRunControls(): string {
-  const controls =
-    state.activeMode === "monitor"
-      ? renderMonitorControls()
-      : state.activeMode === "rewrite"
-        ? renderRewriteControls()
-        : renderCustomControls();
-  const numericControls =
+  const parameters =
     state.activeMode === "custom"
       ? numberControl("customWindowTokens", "Window", state.customWindowTokens, 8, 128, 1)
-      : `<div class="grid grid-cols-2 gap-3">
-          ${numberControl("maxNewTokens", "Max Tokens", state.maxNewTokens, 8, 256, 1)}
-          ${numberControl("temperature", "Temperature", state.temperature, 0, 2, 0.05)}
-        </div>`;
+      : state.activeMode === "monitor"
+        ? `${rangeControl("threshold", "Threshold", state.threshold, 0.05, 0.99, 0.01)}
+           ${numberControl("maxNewTokens", "Max Tokens", state.maxNewTokens, 8, 256, 1)}
+           ${numberControl("temperature", "Temperature", state.temperature, 0, 2, 0.05)}`
+        : `${rangeControl("threshold", "Rewrite Band", state.threshold, 0.05, 0.99, 0.01)}
+           ${rangeControl("strength", "Vector Strength", state.strength, 0, 12, 0.1)}
+           ${numberControl("maxNewTokens", "Max Tokens", state.maxNewTokens, 8, 256, 1)}
+           ${numberControl("temperature", "Temperature", state.temperature, 0, 2, 0.05)}`;
 
   return `
-    <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_240px]">
-      <div class="min-w-0 space-y-4">
-        ${controls}
-      </div>
-      <div class="space-y-4">
-        ${numericControls}
-        ${
-          state.loading
-            ? `<button id="cancel-run" class="flex h-11 w-full items-center justify-center gap-2 border border-hazard bg-red-50 px-4 text-sm font-semibold text-hazard" ${state.cancelRequested ? "disabled" : ""}>
-                <i data-lucide="${state.cancelRequested ? "loader-circle" : "octagon-x"}" class="h-4 w-4 ${state.cancelRequested ? "animate-spin" : ""}"></i>
-                ${state.cancelRequested ? "Cancelling" : "Cancel Run"}
-              </button>`
-            : `<button id="run" class="flex h-11 w-full items-center justify-center gap-2 bg-ink px-4 text-sm font-semibold text-white">
-                <i data-lucide="play" class="h-4 w-4"></i>
-                ${state.activeMode === "custom" ? "Generate Lens" : "Run"}
-              </button>`
-        }
-        ${state.error ? `<div class="border border-hazard bg-red-50 px-3 py-2 text-sm text-hazard">${escapeHtml(state.error)}</div>` : ""}
-      </div>
+    <div class="run-parameter-bar is-${state.activeMode} mt-3 border-t border-line pt-3">
+      ${parameters}
+      ${
+        state.loading
+          ? `<button id="cancel-run" class="run-action flex h-10 items-center justify-center gap-2 border border-hazard bg-red-50 px-4 text-sm font-semibold text-hazard" ${state.cancelRequested ? "disabled" : ""}>
+              <i data-lucide="${state.cancelRequested ? "loader-circle" : "octagon-x"}" class="h-4 w-4 ${state.cancelRequested ? "animate-spin" : ""}"></i>
+              ${state.cancelRequested ? "Cancelling" : "Cancel"}
+            </button>`
+          : `<button id="run" class="run-action flex h-10 items-center justify-center gap-2 bg-ink px-4 text-sm font-semibold text-white">
+              <i data-lucide="play" class="h-4 w-4"></i>
+              ${state.activeMode === "custom" ? "Generate Lens" : "Run"}
+            </button>`
+      }
     </div>
+    ${state.error ? `<div class="mt-3 border border-hazard bg-red-50 px-3 py-2 text-sm text-hazard">${escapeHtml(state.error)}</div>` : ""}
   `;
+}
+
+function renderPolicyControls(): string {
+  if (state.activeMode === "monitor") return renderMonitorControls();
+  if (state.activeMode === "rewrite") return renderRewriteControls();
+  return renderCustomControls();
 }
 
 function renderCustomScenarioButton(): string {
@@ -737,7 +740,7 @@ function renderScenarioButton(scenario: ScenarioPublic): string {
 function renderMonitorControls(): string {
   const concepts = state.profiles?.concepts ?? [];
   return `
-    <div class="space-y-2">
+    <div class="border-b border-line p-3">
       <div class="flex items-center justify-between gap-3">
         <label class="text-xs font-semibold uppercase tracking-normal text-neutral-500">Tripwires</label>
         <div class="grid grid-cols-2 border border-line bg-field p-0.5 text-xs font-semibold">
@@ -745,11 +748,10 @@ function renderMonitorControls(): string {
           ${actionButton("observe", "Observe")}
         </div>
       </div>
-      <div class="flex flex-wrap gap-2">
+      <div class="mt-2 flex flex-wrap gap-1.5">
         ${concepts.map(renderConceptChip).join("") || skeletonLine("Loading concepts")}
       </div>
     </div>
-    ${rangeControl("threshold", "Threshold", state.threshold, 0.05, 0.99, 0.01)}
   `;
 }
 
@@ -783,38 +785,30 @@ function renderConceptChip(concept: ConceptPublic): string {
 function renderRewriteControls(): string {
   const profiles = state.profiles?.rewrite_profiles ?? [];
   return `
-    <div class="space-y-2">
+    <div class="border-b border-line p-3">
       <label class="text-xs font-semibold uppercase tracking-normal text-neutral-500">Rewrite Profile</label>
-      <div class="grid gap-2">
+      <div class="mt-2 grid border border-line md:grid-cols-3">
         ${profiles.map(renderProfileButton).join("") || skeletonLine("Loading profiles")}
       </div>
     </div>
-    ${rangeControl("threshold", "Rewrite Band", state.threshold, 0.05, 0.99, 0.01)}
-    ${rangeControl("strength", "Vector Strength", state.strength, 0, 12, 0.1)}
   `;
 }
 
 function renderProfileButton(profile: RewriteProfilePublic): string {
   const active = state.rewriteProfileId === profile.id;
   return `
-    <button data-profile="${profile.id}" class="border px-3 py-2 text-left${lockedClass()} ${active ? "border-ink bg-white" : "border-line bg-field hover:border-neutral-500"}" ${lockedAttr()}>
+    <button data-profile="${profile.id}" class="profile-row px-3 py-2 text-left${lockedClass()} ${active ? "is-active" : ""}" ${lockedAttr()}>
       <span class="block text-sm font-semibold">${escapeHtml(profile.label)}</span>
-      <span class="block truncate text-xs text-neutral-600">${escapeHtml(profile.target_label)}</span>
-      <span class="mt-2 flex flex-wrap gap-1">
-        ${profile.control_phrases
-          .slice(0, 3)
-          .map((phrase) => `<span class="border border-line bg-white px-1.5 py-0.5 text-[11px] text-neutral-600">${escapeHtml(phrase)}</span>`)
-          .join("")}
-      </span>
+      <span class="mt-0.5 block truncate text-xs text-neutral-600">${escapeHtml(profile.target_label)}</span>
     </button>
   `;
 }
 
 function renderCustomControls(): string {
   return `
-    <div class="space-y-2">
+    <div class="border-b border-line p-3">
       <label class="text-xs font-semibold uppercase tracking-normal text-neutral-500">Generated Concepts</label>
-      <div class="grid gap-3">
+      <div class="mt-2 grid border border-line">
         ${state.customConcepts.map(renderCustomConceptEditor).join("")}
       </div>
     </div>
@@ -823,16 +817,14 @@ function renderCustomControls(): string {
 
 function renderCustomConceptEditor(concept: CustomConceptInput, index: number): string {
   return `
-    <div class="border border-line bg-field p-3">
-      <div class="mb-2 grid grid-cols-[minmax(0,1fr)_112px] gap-2">
-        <input data-custom-label="${index}" value="${escapeHtml(concept.label)}" class="h-9 min-w-0 border border-line bg-white px-2 text-sm outline-none focus:border-ink${lockedClass()}" ${lockedAttr()} />
-        <select data-custom-polarity="${index}" class="h-9 border border-line bg-white px-2 text-xs font-semibold outline-none focus:border-ink${lockedClass()}" ${lockedAttr()}>
+    <div class="custom-concept-row grid grid-cols-[minmax(0,1fr)_96px] gap-2 p-2">
+        <input data-custom-label="${index}" value="${escapeHtml(concept.label)}" aria-label="Concept ${index + 1} label" class="h-9 min-w-0 border border-line bg-white px-2 text-sm outline-none focus:border-ink${lockedClass()}" ${lockedAttr()} />
+        <select data-custom-polarity="${index}" aria-label="Concept ${index + 1} polarity" class="h-9 border border-line bg-white px-2 text-xs font-semibold outline-none focus:border-ink${lockedClass()}" ${lockedAttr()}>
           ${polarityOption("target", concept.polarity)}
           ${polarityOption("risk", concept.polarity)}
           ${polarityOption("neutral", concept.polarity)}
         </select>
-      </div>
-      <textarea data-custom-keywords="${index}" class="h-16 w-full resize-none border border-line bg-white px-2 py-1.5 text-xs leading-5 outline-none focus:border-ink${lockedClass()}" spellcheck="false" ${lockedAttr()}>${escapeHtml(concept.keywords.join(", "))}</textarea>
+        <input data-custom-keywords="${index}" value="${escapeHtml(concept.keywords.join(", "))}" aria-label="Concept ${index + 1} keywords" class="col-span-2 h-9 w-full border border-line bg-white px-2 text-xs outline-none focus:border-ink${lockedClass()}" spellcheck="false" ${lockedAttr()} />
     </div>
   `;
 }
@@ -843,7 +835,7 @@ function polarityOption(value: ConceptPolarity, current: ConceptPolarity): strin
 
 function rangeControl(id: "threshold" | "strength", label: string, value: number, min: number, max: number, step: number): string {
   return `
-    <div class="space-y-2">
+    <div class="run-parameter space-y-1.5">
       <div class="flex items-center justify-between gap-3">
         <label for="${id}" class="text-xs font-semibold uppercase tracking-normal text-neutral-500">${label}</label>
         <span class="font-mono text-xs">${value.toFixed(2)}</span>
@@ -862,7 +854,7 @@ function numberControl(
   step: number
 ): string {
   return `
-    <label class="space-y-1">
+    <label class="run-parameter space-y-1">
       <span class="text-xs font-semibold uppercase tracking-normal text-neutral-500">${label}</span>
       <input id="${id}" type="number" min="${min}" max="${max}" step="${step}" value="${value}" class="h-10 w-full border border-line bg-field px-2 text-sm outline-none focus:border-ink${lockedClass()}" ${lockedAttr()} />
     </label>
@@ -1580,11 +1572,11 @@ function bindEvents() {
     });
   });
 
-  document.querySelectorAll<HTMLTextAreaElement>("[data-custom-keywords]").forEach((textarea) => {
-    textarea.addEventListener("input", () => {
-      const index = Number(textarea.dataset.customKeywords);
+  document.querySelectorAll<HTMLInputElement>("[data-custom-keywords]").forEach((input) => {
+    input.addEventListener("input", () => {
+      const index = Number(input.dataset.customKeywords);
       if (Number.isInteger(index) && state.customConcepts[index]) {
-        state.customConcepts[index].keywords = splitKeywords(textarea.value);
+        state.customConcepts[index].keywords = splitKeywords(input.value);
       }
     });
   });
