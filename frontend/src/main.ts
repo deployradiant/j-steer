@@ -358,7 +358,7 @@ function render() {
 }
 
 function engineLine(): string {
-  return "Read Qwen's J-space with Anthropic's Jacobian lens and stop unsafe internal words.";
+  return "Read Qwen's J-space with Anthropic's Jacobian lens to stop or redirect unsafe internal words.";
 }
 
 function lensStatusText(): string {
@@ -452,8 +452,8 @@ function renderRunControls(): string {
         ? `${numberControl("lensRankThreshold", "Rank Cutoff", state.lensRankThreshold, 1, 512, 1)}
            ${numberControl("maxNewTokens", "Max Tokens", state.maxNewTokens, 8, 256, 1)}
            ${numberControl("temperature", "Temperature", state.temperature, 0, 2, 0.05)}`
-        : `${rangeControl("threshold", "Rewrite Band", state.threshold, 0.05, 0.99, 0.01)}
-           ${rangeControl("strength", "Vector Strength", state.strength, 0, 12, 0.1)}
+        : `${numberControl("lensRankThreshold", "Rank Cutoff", state.lensRankThreshold, 1, 512, 1)}
+           ${rangeControl("strength", "J-lens Edit Strength", state.strength, 0, 12, 0.1)}
            ${numberControl("maxNewTokens", "Max Tokens", state.maxNewTokens, 8, 256, 1)}
            ${numberControl("temperature", "Temperature", state.temperature, 0, 2, 0.05)}`;
 
@@ -655,7 +655,7 @@ function tabButton(mode: AppMode, icon: string, label: string): string {
     .join(" ");
   const descriptions: Record<AppMode, string> = {
     monitor: "Detect and kill unsafe latent trajectories.",
-    rewrite: "Apply activation edits during decoding."
+    rewrite: "Back-project approved tokens through the J-lens."
   };
   return `
     <button data-tab="${mode}" class="${classes}" title="${escapeHtml(label)}" ${lockedAttr()}>
@@ -677,7 +677,7 @@ function renderScenarioButton(scenario: ScenarioPublic): string {
   return `
     <button data-scenario="${scenario.id}" class="scenario-row ${active ? "is-active" : ""} flex w-full items-center justify-between gap-4 px-3 py-2.5 text-left text-sm${lockedClass()}" ${lockedAttr()}>
       <span class="font-semibold">${escapeHtml(scenario.label)}</span>
-      <span class="shrink-0 text-right text-xs leading-4 text-neutral-600">${escapeHtml(scenario.action === "kill" ? "J-lens rank filter" : "Steering rewrite demo")}</span>
+      <span class="shrink-0 text-right text-xs leading-4 text-neutral-600">${escapeHtml(scenario.action === "kill" ? "J-lens rank filter" : "J-lens rewrite")}</span>
     </button>
   `;
 }

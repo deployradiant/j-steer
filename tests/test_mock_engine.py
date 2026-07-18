@@ -81,4 +81,7 @@ def test_rewrite_has_baseline_and_interventions() -> None:
     assert response.interventions
     assert response.jspace_injections
     assert response.frames[0].layer_activations
+    assert response.frames[0].proxy_concepts == []
+    assert any(frame.action == "rewrite" for frame in response.frames)
+    assert "J-lens-triggered" in response.summary
     assert "HeliosCRM" in response.output

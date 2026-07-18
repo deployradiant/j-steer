@@ -70,11 +70,12 @@ class HFJSpaceEngine:
 
     Monitoring uses Anthropic's published Jacobian lens directly: each fitted layer is
     transported into the final residual basis and decoded with Qwen's own unembedding.
-    The older editable concept-vector path remains available to the rewrite controller.
+    Rewrite uses those vocabulary ranks as triggers and differentiates an approved-token
+    objective back through the same fitted lens to edit the selected source layer.
     """
 
     mode = "hf"
-    readout = "Anthropic Jacobian lens vocabulary-rank filter"
+    readout = "Anthropic J-lens rank filter + gradient steering"
 
     def __init__(self) -> None:
         self.lens_id = os.getenv("JSTEER_LENS_ID", DEFAULT_LENS_ID)
@@ -251,7 +252,6 @@ class HFJSpaceEngine:
         if self.layer < 0:
             self.layer = max(1, int(layer_count * 0.58))
         self._load_jacobian_lens()
-        self.bank = self._build_vector_bank()
         self._loaded = True
 
     def _jacobian_lens_info(self) -> JacobianLensInfo:
@@ -644,7 +644,12 @@ class HFJSpaceEngine:
                 steering=None,
             )
 
-        steering = self._steering_state(profile, request, injections)
+        initial_match = self._rewrite_prompt_match(
+            input_ids,
+            list(profile.suppress_concepts),
+            request.lens_rank_threshold,
+        )
+        steering = self._steering_state(profile, request, injections, initial_match)
         steered_text, frames = self._generate(
             input_ids=input_ids,
             request=request,
@@ -661,7 +666,7 @@ class HFJSpaceEngine:
             prompt=request.prompt,
             output=steered_text,
             baseline_output=baseline_text,
-            summary=f"{len(interventions)} forward-hook rewrites applied at layer {self.layer}.",
+            summary=f"{len(interventions)} J-lens-triggered rewrites applied at layer {self.layer}.",
             engine=self.info(),
             frames=frames,
             baseline_frames=baseline_frames,
@@ -704,7 +709,12 @@ class HFJSpaceEngine:
                 baseline_text = frame.generated_text
                 yield {"type": "baseline_frame", "frame": frame}
 
-        steering = self._steering_state(profile, request, injections)
+        initial_match = self._rewrite_prompt_match(
+            input_ids,
+            list(profile.suppress_concepts),
+            request.lens_rank_threshold,
+        )
+        steering = self._steering_state(profile, request, injections, initial_match)
         frames: list[TraceFrame] = []
         steered_text = ""
         for frame in self._iter_generate(
@@ -728,7 +738,7 @@ class HFJSpaceEngine:
                 prompt=request.prompt,
                 output=steered_text,
                 baseline_output=baseline_text,
-                summary=f"{len(interventions)} forward-hook rewrites applied at layer {self.layer}.",
+                summary=f"{len(interventions)} J-lens-triggered rewrites applied at layer {self.layer}.",
                 engine=self.info(),
                 frames=frames,
                 baseline_frames=baseline_frames,
@@ -793,23 +803,23 @@ class HFJSpaceEngine:
                         output_hidden_states=True,
                     )
                 past_key_values = outputs.past_key_values
-                hidden = outputs.hidden_states[self.layer + 1][0, -1, :]
+                layer_readouts = self._jlens_layer_readouts(
+                    outputs.hidden_states,
+                    monitor_ids,
+                    request.lens_rank_threshold,
+                )
+                scores = self._lens_match_scores(layer_readouts)
+                proxy_scores: list[ConceptScore] = []
+                jacobian_scores = scores
+                control_readout = min(
+                    layer_readouts,
+                    key=lambda item: abs(item.layer - self.layer),
+                    default=None,
+                )
+                jacobian_tokens = control_readout.top_tokens if control_readout else []
+                next_match = self._best_ranked_readout(layer_readouts)
                 if request.mode == "monitor":
-                    layer_readouts = self._jlens_layer_readouts(
-                        outputs.hidden_states,
-                        monitor_ids,
-                        request.lens_rank_threshold,
-                    )
-                    scores = self._lens_match_scores(layer_readouts)
-                    proxy_scores: list[ConceptScore] = []
-                    jacobian_scores = scores
-                    control_readout = min(
-                        layer_readouts,
-                        key=lambda item: abs(item.layer - self.layer),
-                        default=None,
-                    )
-                    jacobian_tokens = control_readout.top_tokens if control_readout else []
-                    if request.action == "kill" and step > 0 and self._best_ranked_readout(layer_readouts) is not None:
+                    if request.action == "kill" and step > 0 and next_match is not None:
                         yield TraceFrame(
                             step=step + 1,
                             phase="decode",
@@ -826,10 +836,10 @@ class HFJSpaceEngine:
                         )
                         return
                 else:
-                    scores, proxy_scores, jacobian_scores, jacobian_tokens = self._score_readouts(hidden, monitor_ids)
-                    layer_readouts = self._layer_activation_scan(outputs.hidden_states, monitor_ids)
+                    if state is not None:
+                        state["pending_match"] = next_match
                 logits = outputs.logits[:, -1, :]
-                if state is not None:
+                if state is not None and state.get("has_rewritten"):
                     logits = self._apply_control_phrase_bias(logits, state, generated_ids)
                 next_token = self._sample(logits, request.temperature, request.top_p, request.seed + step)
                 token_id = int(next_token.item())
@@ -838,6 +848,7 @@ class HFJSpaceEngine:
                 generated_ids.append(token_id)
                 generated_text = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
                 action = "rewrite" if state and state.pop("last_rewrite", False) else "observe"
+                rewrite_match = state.pop("last_match", None) if state and action == "rewrite" else None
                 yield TraceFrame(
                     step=step + 1,
                     phase="decode",
@@ -851,7 +862,13 @@ class HFJSpaceEngine:
                     layer_activations=layer_readouts,
                     action=action,
                     note=(
-                        "Forward hook edited hidden state; decoder readout favored approved terms."
+                        (
+                            f"J-lens matched {rewrite_match.matched_token!r} at "
+                            f"L{rewrite_match.layer} rank {rewrite_match.rank}; its gradient "
+                            "back-projection edited the control layer."
+                        )
+                        if rewrite_match is not None
+                        else "J-lens gradient back-projection edited the control layer."
                         if action == "rewrite"
                         else None
                     ),
@@ -879,59 +896,61 @@ class HFJSpaceEngine:
         profile: RewriteProfile,
         request: RunRequest,
         lookup_injections: list[JSpaceInjection] | None = None,
+        initial_match: LayerActivation | None = None,
     ) -> dict[str, Any]:
-        assert self.bank is not None and self.tokenizer is not None
-        torch = self.torch
-        target = self.bank.directions[profile.target_concept]
-        suppressors = [self.bank.directions[concept_id] for concept_id in profile.suppress_concepts]
-        suppress = torch.stack(suppressors).mean(dim=0) if suppressors else torch.zeros_like(target)
-        delta = request.strength * target - (request.strength * 0.7) * suppress
-        injection_delta = self._lookup_injection_direction(lookup_injections or [])
-        if injection_delta is not None:
-            delta = delta + min(request.strength, 4.0) * injection_delta.to(delta.device)
+        assert self.jacobian_lens is not None and self.tokenizer is not None and self.torch is not None
         phrase_sequences = self._control_phrase_sequences(profile)
         return {
             "profile": profile,
-            "delta": delta,
             "lookup_injections": lookup_injections or [],
             "phrase_sequences": phrase_sequences,
             "phrase_bias": max(0.0, 4.0 + request.strength * 2.2),
             "force_control_phrase": True,
-            "threshold": request.threshold,
-            "monitor_ids": list(profile.suppress_concepts),
+            "target_token_ids": self._rewrite_target_token_ids(profile, lookup_injections or []),
+            "suppress_token_ids": self._rewrite_suppress_token_ids(profile),
+            "strength": request.strength,
+            "pending_match": initial_match,
             "interventions": [],
             "last_rewrite": False,
+            "last_match": None,
+            "has_rewritten": False,
             "step": 0,
         }
 
     def _steering_hook(self, output: Any, state: dict[str, Any]) -> Any:
         hidden = output[0] if isinstance(output, tuple) else output
         last = hidden[0, -1, :].detach()
-        scores = self._score_hidden(last, state["monitor_ids"])
-        peak = max((score.score for score in scores), default=0.0)
         state["step"] += 1
-        should_rewrite = peak >= state["threshold"] or state["step"] <= 3
-        state["last_rewrite"] = should_rewrite
-        if not should_rewrite:
+        match: LayerActivation | None = state.pop("pending_match", None)
+        state["last_rewrite"] = match is not None
+        state["last_match"] = match
+        if match is None:
             return output
 
-        delta = state["delta"].to(device=hidden.device, dtype=hidden.dtype)
+        delta = self._jlens_rewrite_delta(
+            last,
+            state["target_token_ids"],
+            state["suppress_token_ids"],
+            state["strength"],
+        ).to(device=hidden.device, dtype=hidden.dtype)
         edited = hidden.clone()
         edited[:, -1, :] = edited[:, -1, :] + delta
+        state["has_rewritten"] = True
         profile: RewriteProfile = state["profile"]
-        suppress_label = ", ".join(CONCEPTS[concept_id].label for concept_id in profile.suppress_concepts)
         lookup_injections: list[JSpaceInjection] = state.get("lookup_injections", [])
         state["interventions"].append(
             Intervention(
                 step=max(0, state["step"] - 1),
-                from_concept=suppress_label,
+                from_concept=match.label,
                 to_concept=CONCEPTS[profile.target_concept].label,
                 strength=float(delta.norm().detach().float().cpu()),
                 reason=(
-                    "Forward hook added target activation, subtracted suppressor activation, "
-                    "and constrained the decoder readout to the approved control phrase."
+                    f"Anthropic J-lens word {match.matched_token!r} entered the rank cutoff at "
+                    f"L{match.layer} rank {match.rank}. The approved-token objective was differentiated "
+                    "through the fitted lens and applied at the control layer; the decoder constraint "
+                    "then stabilized the approved phrase."
                     + (
-                        " Keyword lookup context was projected directly into the J-space steering delta."
+                        " Retrieved approved terms were included in the J-lens target objective."
                         if lookup_injections
                         else ""
                     )
@@ -941,6 +960,60 @@ class HFJSpaceEngine:
         if isinstance(output, tuple):
             return (edited, *output[1:])
         return edited
+
+    def _rewrite_prompt_match(
+        self,
+        input_ids: Any,
+        concept_ids: list[str],
+        rank_threshold: int,
+    ) -> LayerActivation | None:
+        outputs = self._forward(input_ids, output_hidden_states=True)
+        readouts = self._jlens_layer_readouts(outputs.hidden_states, concept_ids, rank_threshold)
+        return self._best_ranked_readout(readouts)
+
+    def _rewrite_target_token_ids(
+        self,
+        profile: RewriteProfile,
+        lookup_injections: list[JSpaceInjection],
+    ) -> list[int]:
+        assert self.tokenizer is not None
+        token_ids = list(self._single_token_policy_terms(CONCEPTS[profile.target_concept]))
+        texts = [*profile.control_phrases, *(item.injected_text for item in lookup_injections[:3])]
+        for text in texts:
+            token_ids.extend(int(token_id) for token_id in self.tokenizer.encode(text, add_special_tokens=False))
+        return list(dict.fromkeys(token_ids))[:96]
+
+    def _rewrite_suppress_token_ids(self, profile: RewriteProfile) -> list[int]:
+        token_ids = [
+            token_id
+            for concept_id in profile.suppress_concepts
+            for token_id in self._single_token_policy_terms(CONCEPTS[concept_id])
+        ]
+        return list(dict.fromkeys(token_ids))
+
+    def _jlens_rewrite_delta(
+        self,
+        hidden: Any,
+        target_token_ids: list[int],
+        suppress_token_ids: list[int],
+        strength: float,
+    ) -> Any:
+        """Differentiate an approved-token objective through unembed(J_l @ h_l)."""
+        assert self.jacobian_lens is not None and self.torch is not None
+        if not target_token_ids:
+            raise RuntimeError("The rewrite profile has no Qwen target tokens for J-lens steering.")
+
+        matrix = self.jacobian_lens.matrices[self.layer]
+        with self.torch.enable_grad():
+            source = hidden.detach().to(device=matrix.device, dtype=matrix.dtype).requires_grad_(True)
+            transported = source @ matrix.T
+            logits = self.jacobian_lens.lens_model.unembed(transported.unsqueeze(0))[0]
+            objective = logits[target_token_ids].mean()
+            if suppress_token_ids:
+                objective = objective - 0.7 * logits[suppress_token_ids].mean()
+            (gradient,) = self.torch.autograd.grad(objective, source)
+        direction = gradient.detach()
+        return float(strength) * direction / (direction.norm() + 1e-6)
 
     def _control_phrase_sequences(self, profile: RewriteProfile) -> list[list[int]]:
         assert self.tokenizer is not None

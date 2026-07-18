@@ -293,57 +293,64 @@ class MockJSpaceEngine:
         base_scores = self._apply_lookup_injection_boost(base_scores, injections, profile.target_concept)
         peak_score = max((score.score for score in base_scores), default=0.0)
 
-        frames.append(
-            self._trace_frame(
-                step=0,
-                phase="prompt",
-                layer=self.layer,
-                token="<prompt>",
-                scores=base_scores,
-                action="observe",
-                note=self._rewrite_prompt_note(injections),
-            )
+        prompt_frame = self._trace_frame(
+            step=0,
+            phase="prompt",
+            layer=self.layer,
+            token="<prompt>",
+            scores=base_scores,
+            action="observe",
+            note="Prompt decoded through the mock J-lens before the rewrite stream starts.",
+            direct_lens=True,
+            rank_threshold=request.lens_rank_threshold,
         )
+        frames.append(prompt_frame)
+        pending_match = self._best_lens_match(prompt_frame)
 
         tokens = output.split()
-        rewrite_steps = {2, 6, 13}
-        suppress_label = ", ".join(CONCEPTS[concept_id].label for concept_id in profile.suppress_concepts)
         target_label = CONCEPTS[profile.target_concept].label
         for idx, token in enumerate(tokens[: min(len(tokens), 48)], start=1):
             generated = f"{generated} {token}".strip()
-            action = "rewrite" if idx in rewrite_steps else "observe"
-            note = "Latent vector swap applied." if action == "rewrite" else "Steered trajectory remains stable."
-            scores = self._rewrite_scores(base_scores, idx, profile.target_concept)
-            frames.append(
-                self._trace_frame(
-                    step=idx,
-                    phase="decode",
-                    layer=self.layer,
-                    token=token,
-                    generated_text=generated,
-                    scores=scores,
-                    action=action,
-                    note=note,
-                )
+            action = "rewrite" if pending_match is not None else "observe"
+            note = (
+                "Mock unsafe rank match triggered a J-lens gradient back-projection."
+                if action == "rewrite"
+                else "J-lens vocabulary trajectory remains stable."
             )
-            if action == "rewrite":
+            scores = self._rewrite_scores(base_scores, idx, profile.target_concept)
+            frame = self._trace_frame(
+                step=idx,
+                phase="decode",
+                layer=self.layer,
+                token=token,
+                generated_text=generated,
+                scores=scores,
+                action=action,
+                note=note,
+                direct_lens=True,
+                rank_threshold=request.lens_rank_threshold,
+            )
+            frames.append(frame)
+            if pending_match is not None:
                 interventions.append(
                     Intervention(
                         step=idx,
-                        from_concept=suppress_label,
+                        from_concept=pending_match.label,
                         to_concept=target_label,
                         strength=request.strength or profile.default_strength,
                         reason=(
-                            "Source concept crossed the rewrite band; added target direction and "
-                            "subtracted suppressor direction at the monitored layer."
+                            f"Mock J-lens word {pending_match.matched_token!r} entered the rank cutoff at "
+                            f"L{pending_match.layer} rank {pending_match.rank}. The approved-token objective "
+                            "was back-projected through the selected lens at the control layer."
                             + (
-                                " Keyword lookup context was also projected into the target path."
+                                " Retrieved approved terms were included in the target objective."
                                 if injections
                                 else ""
                             )
                         ),
                     )
                 )
+            pending_match = self._best_lens_match(frame)
 
         return RunResponse(
             id=str(uuid.uuid4()),
@@ -353,7 +360,7 @@ class MockJSpaceEngine:
             output=output,
             baseline_output=baseline_output if request.compare_baseline else None,
             summary=(
-                f"{len(interventions)} activation rewrites redirected the response toward "
+                f"{len(interventions)} J-lens-triggered rewrites redirected the response toward "
                 f"{profile.target_label}."
             ),
             engine=self.info(),
