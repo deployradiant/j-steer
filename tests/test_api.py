@@ -29,6 +29,8 @@ def test_profiles_endpoint() -> None:
     assert body["lenses"][0]["target_model"] == "Qwen/Qwen3-1.7B"
     assert body["rewrite_profiles"][0]["unsafe_words"]
     assert body["rewrite_profiles"][0]["replacement_words"]
+    scenario_ids = {scenario["id"] for scenario in body["scenarios"]}
+    assert {"tripwire-obfuscated-secret", "trace-hidden-planet", "rewrite-sport-swap"} <= scenario_ids
     assert len(body["lenses"][0]["revision"]) == 40
     assert "frame-ancestors 'none'" in response.headers["content-security-policy"]
     assert response.headers["x-content-type-options"] == "nosniff"

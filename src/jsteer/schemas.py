@@ -226,10 +226,13 @@ class ScenarioPublic(BaseModel):
     prompt: str
     monitor_ids: list[str] = Field(default_factory=list)
     unsafe_words: list[str] = Field(default_factory=list)
+    replacement_words: list[str] = Field(default_factory=list)
     rewrite_profile_id: str | None = None
     action: MonitorAction = "kill"
     threshold: float = 0.66
     lens_rank_threshold: int = Field(default=64, ge=1, le=512)
+    max_new_tokens: int | None = Field(default=None, ge=1, le=256)
+    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
 
 
 class LensPublic(BaseModel):

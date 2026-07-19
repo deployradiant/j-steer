@@ -3,8 +3,9 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+from jsteer.concepts import REWRITE_PROFILES
 from jsteer.hf_engine import HFJSpaceEngine
-from jsteer.schemas import LayerActivation, TraceFrame
+from jsteer.schemas import LayerActivation, RunRequest, TraceFrame
 
 
 def test_model_id_guard_accepts_case_difference() -> None:
@@ -83,6 +84,26 @@ def test_policy_term_validation_uses_single_qwen_token_variant() -> None:
     assert validation.decoded_token == "secret"
 
 
+def test_policy_term_validation_accepts_capitalized_single_token_variant() -> None:
+    class FakeTokenizer:
+        def encode(self, text: str, add_special_tokens: bool = False) -> list[int]:
+            del add_special_tokens
+            return {"venus": [10, 11], " Venus": [84]}.get(text, [1, 2])
+
+        def decode(self, token_ids: list[int], skip_special_tokens: bool = True) -> str:
+            del skip_special_tokens
+            return " Venus" if token_ids == [84] else ""
+
+    engine = HFJSpaceEngine()
+    engine.tokenizer = FakeTokenizer()
+
+    validation = engine._validate_policy_term("venus")
+
+    assert validation.valid is True
+    assert validation.token_id == 84
+    assert validation.decoded_token == "Venus"
+
+
 def test_rewrite_swaps_jlens_coordinates_and_preserves_orthogonal_residual() -> None:
     class LinearLensModel:
         def __init__(self, unembedding: torch.Tensor) -> None:
@@ -95,6 +116,7 @@ def test_rewrite_swaps_jlens_coordinates_and_preserves_orthogonal_residual() -> 
     engine.torch = torch
     engine.layer = 0
     matrix = torch.eye(3)
+    engine.model = SimpleNamespace(lm_head=SimpleNamespace(weight=torch.eye(3)))
     engine.jacobian_lens = SimpleNamespace(
         matrices={0: matrix},
         lens_model=LinearLensModel(torch.eye(3)),
@@ -118,3 +140,37 @@ def test_rewrite_swaps_jlens_coordinates_and_preserves_orthogonal_residual() -> 
     assert metrics["target_probability_after"] > metrics["target_probability_before"]
     assert metrics["jlens_kl_divergence"] > 0
     assert metrics["jlens_total_variation"] > 0
+
+
+def test_rewrite_uses_detected_jlens_layer_as_control_layer() -> None:
+    class FakeTokenizer:
+        def encode(self, text: str, add_special_tokens: bool = False) -> list[int]:
+            del add_special_tokens
+            return [sum(text.encode()) % 1000]
+
+    engine = HFJSpaceEngine()
+    engine.torch = torch
+    engine.tokenizer = FakeTokenizer()
+    engine.jacobian_lens = SimpleNamespace()
+    match = LayerActivation(
+        layer=21,
+        concept_id="sport_source",
+        label="Soccer Report",
+        score=0.9,
+        polarity="risk",
+        rank=3,
+        matched_token="soccer",
+    )
+
+    state = engine._steering_state(
+        REWRITE_PROFILES["sport_report_swap"],
+        RunRequest(
+            mode="rewrite",
+            prompt="test",
+            unsafe_words=["soccer"],
+            replacement_words=["tennis"],
+        ),
+        initial_match=match,
+    )
+
+    assert state["control_layer"] == 21

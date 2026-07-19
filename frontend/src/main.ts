@@ -49,10 +49,13 @@ interface ScenarioPublic {
   prompt: string;
   monitor_ids: string[];
   unsafe_words: string[];
+  replacement_words: string[];
   rewrite_profile_id: string | null;
   action: MonitorAction;
   threshold: number;
   lens_rank_threshold: number;
+  max_new_tokens: number | null;
+  temperature: number | null;
 }
 
 interface LensPublic {
@@ -728,10 +731,15 @@ function tabButton(mode: AppMode, icon: string, label: string): string {
 
 function renderScenarioButton(scenario: ScenarioPublic): string {
   const active = state.prompt === scenario.prompt;
+  const behavior = scenario.mode === "rewrite"
+    ? "J-lens coordinate swap"
+    : scenario.action === "kill"
+      ? "Kill on rank"
+      : "Observe ranks";
   return `
     <button data-scenario="${scenario.id}" class="scenario-row ${active ? "is-active" : ""} flex w-full items-center justify-between gap-4 px-3 py-2.5 text-left text-sm${lockedClass()}" ${lockedAttr()}>
       <span class="font-semibold">${escapeHtml(scenario.label)}</span>
-      <span class="shrink-0 text-right text-xs leading-4 text-neutral-600">${escapeHtml(scenario.action === "kill" ? "J-lens rank filter" : "J-lens rewrite")}</span>
+      <span class="shrink-0 text-right text-xs leading-4 text-neutral-600">${behavior}</span>
     </button>
   `;
 }
@@ -1776,6 +1784,8 @@ function applyScenario(scenario: ScenarioPublic) {
   state.action = scenario.action;
   state.threshold = scenario.threshold;
   state.lensRankThreshold = scenario.lens_rank_threshold;
+  if (scenario.max_new_tokens !== null) state.maxNewTokens = scenario.max_new_tokens;
+  if (scenario.temperature !== null) state.temperature = scenario.temperature;
   if (scenario.monitor_ids?.length) {
     state.monitorIds = new Set(scenario.monitor_ids);
   }
@@ -1787,6 +1797,8 @@ function applyScenario(scenario: ScenarioPublic) {
       state.unsafeWords = [...profile.unsafe_words];
       state.replacementWords = [...profile.replacement_words];
     }
+    if (scenario.unsafe_words.length) state.unsafeWords = [...scenario.unsafe_words];
+    if (scenario.replacement_words.length) state.replacementWords = [...scenario.replacement_words];
   } else {
     state.unsafeWords = [...scenario.unsafe_words];
     state.replacementWords = [];

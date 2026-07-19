@@ -755,7 +755,10 @@ class HFJSpaceEngine:
             output=steered_text,
             baseline_output=baseline_text,
             decoder_output=decoder_text,
-            summary=f"{len(interventions)} J-lens-triggered rewrites applied at layer {self.layer}.",
+            summary=(
+                f"{len(interventions)} J-lens-triggered rewrites applied at layer "
+                f"{steering['control_layer']}."
+            ),
             engine=self.info(),
             frames=frames,
             baseline_frames=baseline_frames,
@@ -842,7 +845,10 @@ class HFJSpaceEngine:
                 output=steered_text,
                 baseline_output=baseline_text,
                 decoder_output=decoder_text,
-                summary=f"{len(interventions)} J-lens-triggered rewrites applied at layer {self.layer}.",
+                summary=(
+                    f"{len(interventions)} J-lens-triggered rewrites applied at layer "
+                    f"{steering['control_layer']}."
+                ),
                 engine=self.info(),
                 frames=frames,
                 baseline_frames=baseline_frames,
@@ -889,7 +895,8 @@ class HFJSpaceEngine:
         handle = None
         state = steering
         if state is not None and state.get("activation_edit"):
-            handle = self.model.model.layers[self.layer].register_forward_hook(
+            control_layer = int(state.get("control_layer", self.layer))
+            handle = self.model.model.layers[control_layer].register_forward_hook(
                 lambda module, inputs, output: self._steering_hook(output, state)
             )
 
@@ -958,7 +965,7 @@ class HFJSpaceEngine:
                 yield TraceFrame(
                     step=step + 1,
                     phase="decode",
-                    layer=self.layer,
+                    layer=int(state.get("control_layer", self.layer)) if state else self.layer,
                     token=self.tokenizer.decode([token_id], skip_special_tokens=True),
                     generated_text=generated_text,
                     top_concepts=scores,
@@ -1025,6 +1032,7 @@ class HFJSpaceEngine:
             ),
             "suppress_token_ids": self._rewrite_suppress_token_ids(profile, request.unsafe_words),
             "strength": request.strength,
+            "control_layer": initial_match.layer if initial_match is not None else self.layer,
             "pending_match": initial_match,
             "interventions": [],
             "last_rewrite": False,
@@ -1060,11 +1068,13 @@ class HFJSpaceEngine:
             return output
 
         source_token_id = self._matched_policy_token_id(match, state["suppress_token_ids"])
+        control_layer = int(state["control_layer"])
         delta, target_token_id = self._jlens_coordinate_swap_delta(
             last,
             source_token_id,
             state["target_token_ids"],
             state["strength"],
+            layer=control_layer,
         )
         delta = delta.to(device=hidden.device, dtype=hidden.dtype)
         edited = hidden.clone()
@@ -1079,6 +1089,7 @@ class HFJSpaceEngine:
             edited[0, -1, :].detach(),
             source_token_id,
             target_token_id,
+            layer=control_layer,
         )
         state["interventions"].append(
             Intervention(
@@ -1092,7 +1103,7 @@ class HFJSpaceEngine:
                 reason=(
                     f"Anthropic J-lens word {match.matched_token!r} entered the rank cutoff at "
                     f"L{match.layer} rank {match.rank}. Its {source_token!r} coordinate was swapped "
-                    f"with the approved {target_token!r} coordinate at the control layer, while the "
+                    f"with the approved {target_token!r} coordinate at control layer L{control_layer}, while the "
                     "residual component outside their two-direction span was preserved."
                     + (
                         " Retrieved approved terms were available to the target selector."
@@ -1112,10 +1123,11 @@ class HFJSpaceEngine:
         after_hidden: Any,
         source_token_id: int,
         target_token_id: int,
+        layer: int | None = None,
     ) -> dict[str, int | float]:
         assert self.torch is not None
-        before_logits = self._jacobian_logits(self._transport_jacobian_residual(before_hidden)).float()
-        after_logits = self._jacobian_logits(self._transport_jacobian_residual(after_hidden)).float()
+        before_logits = self._jacobian_logits(self._transport_jacobian_residual(before_hidden, layer)).float()
+        after_logits = self._jacobian_logits(self._transport_jacobian_residual(after_hidden, layer)).float()
         before_log_probabilities = self.torch.log_softmax(before_logits, dim=-1)
         after_log_probabilities = self.torch.log_softmax(after_logits, dim=-1)
         before_probabilities = before_log_probabilities.exp()
@@ -1206,7 +1218,15 @@ class HFJSpaceEngine:
         if not term:
             return []
         token_ids: list[int] = []
-        for variant in (term, f" {term}"):
+        variants = (
+            term,
+            f" {term}",
+            term.capitalize(),
+            f" {term.capitalize()}",
+            term.upper(),
+            f" {term.upper()}",
+        )
+        for variant in variants:
             encoded = self.tokenizer.encode(variant, add_special_tokens=False)
             if len(encoded) == 1:
                 token_ids.append(int(encoded[0]))
@@ -1231,30 +1251,29 @@ class HFJSpaceEngine:
         source_token_id: int,
         target_token_ids: list[int],
         scale: float,
+        layer: int | None = None,
     ) -> tuple[Any, int]:
         """Swap source/target J-lens coordinates while preserving the orthogonal residual."""
-        assert self.jacobian_lens is not None and self.torch is not None
+        assert self.jacobian_lens is not None and self.model is not None and self.torch is not None
         if not target_token_ids:
             raise RuntimeError("The rewrite profile has no Qwen target tokens for J-lens steering.")
 
-        matrix = self.jacobian_lens.matrices[self.layer]
-        with self.torch.enable_grad():
-            source = hidden.detach().to(device=matrix.device, dtype=matrix.dtype).requires_grad_(True)
-            transported = source @ matrix.T
+        source_layer = self.layer if layer is None else layer
+        matrix = self.jacobian_lens.matrices[source_layer]
+        source = hidden.detach().to(device=matrix.device, dtype=matrix.dtype)
+        transported = source @ matrix.T
+        with self.torch.no_grad():
             logits = self.jacobian_lens.lens_model.unembed(transported.unsqueeze(0))[0]
             target_index = int(logits[target_token_ids].argmax().detach().cpu())
             target_token_id = target_token_ids[target_index]
-            (source_direction,) = self.torch.autograd.grad(
-                logits[source_token_id], source, retain_graph=True
-            )
-            (target_direction,) = self.torch.autograd.grad(logits[target_token_id], source)
+            unembedding = self.model.lm_head.weight.detach().to(device=matrix.device, dtype=matrix.dtype)
+            source_direction = matrix.T @ unembedding[source_token_id]
+            target_direction = matrix.T @ unembedding[target_token_id]
 
-        source_direction = source_direction.detach()
-        target_direction = target_direction.detach()
         source_direction = source_direction / (source_direction.norm() + 1e-6)
         target_direction = target_direction / (target_direction.norm() + 1e-6)
         basis = self.torch.stack((source_direction, target_direction), dim=1)
-        coordinates = self.torch.linalg.pinv(basis.float()) @ source.detach().float()
+        coordinates = self.torch.linalg.pinv(basis.float()) @ source.float()
         swapped = coordinates.flip(0)
         delta = float(scale) * (basis.float() @ (swapped - coordinates))
         return delta.to(dtype=hidden.dtype), target_token_id

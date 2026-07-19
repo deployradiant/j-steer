@@ -91,3 +91,22 @@ def test_rewrite_has_baseline_and_interventions() -> None:
     assert any(frame.action == "rewrite" for frame in response.frames)
     assert "J-lens-triggered" in response.summary
     assert "HeliosCRM" in response.output
+
+
+def test_sport_report_rewrite_keeps_control_arms_distinct() -> None:
+    engine = MockJSpaceEngine()
+    response = engine.run(
+        RunRequest(
+            mode="rewrite",
+            prompt="Think of a sport, then answer with only its name in one lowercase word:",
+            rewrite_profile_id="sport_report_swap",
+            unsafe_words=["soccer"],
+            replacement_words=["tennis"],
+        )
+    )
+
+    assert response.baseline_output == "soccer"
+    assert response.decoder_output == "tennis"
+    assert response.output == "tennis"
+    assert response.interventions
+    assert response.interventions[0].target_token == "tennis"

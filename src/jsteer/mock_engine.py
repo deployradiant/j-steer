@@ -477,6 +477,8 @@ class MockJSpaceEngine:
         )
 
     def _baseline_rewrite_output(self, profile_id: str) -> str:
+        if profile_id == "sport_report_swap":
+            return "soccer"
         if profile_id == "evidence_guard":
             return (
                 "Our product reduces compliance review time by 47% and is proven to eliminate audit "
@@ -494,6 +496,8 @@ class MockJSpaceEngine:
 
     def _steered_rewrite_output(self, profile_id: str, injections: list[JSpaceInjection] | None = None) -> str:
         injection_summary = self._rewrite_lookup_sentence(injections or [])
+        if profile_id == "sport_report_swap":
+            return "tennis"
         if profile_id == "evidence_guard":
             return (
                 "I can write this as a sourced claim once the benchmark is provided. For now: "
@@ -590,6 +594,12 @@ class MockJSpaceEngine:
         for concept_id in concept_ids:
             concept = CONCEPTS[concept_id]
             matches = [keyword for keyword in concept.keywords if keyword in text]
+            if concept_id == "credential_exfiltration" and {"passwrod", "toekn"} & set(text.split()):
+                matches = ["password", "token"]
+            if concept_id == "planet_source" and "fourth from the sun" in text:
+                matches = ["mars"]
+            if concept_id == "sport_source" and "think of a sport" in text:
+                matches = ["soccer"]
             seed = int(hashlib.sha256(f"{prompt}:{concept_id}".encode()).hexdigest()[:8], 16)
             jitter = random.Random(seed).uniform(0.0, 0.12)
             score = floor + jitter + min(0.52, len(matches) * 0.18)

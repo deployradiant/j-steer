@@ -21,7 +21,7 @@ The right model-state rail owns lens selection. The API publishes only artifacts
 
 Tripwire and Rewrite policies are explicit word lists. The UI validates every edited term with the deployed Qwen tokenizer and displays its vocabulary ID; terms that split into multiple tokens cannot start a run. Rewrite uses the validated unsafe list as source-coordinate candidates and the validated replacement list as target-coordinate candidates.
 
-`Rewrite` starts with the same direct per-layer vocabulary-rank filter. When an unsafe word enters the cutoff, J-Steer differentiates that token and the strongest approved token through `unembed(J_l @ h_l)` to obtain two local J-lens directions. It then follows the paper's coordinate intervention: solve `c = V^+ h` for `V = [v_source, v_target]`, swap the two entries of `c`, and apply `h' = h + scale * V(swap(c) - c)`. The component of the residual outside that two-direction span is unchanged. Retrieved approved terms can join the target selector. The synchronized decoder-only arm remains visible as a separate control; it is not mixed into the primary J-lens arm.
+`Rewrite` starts with the same direct per-layer vocabulary-rank filter. When an unsafe word enters the cutoff, the strongest matching fitted layer becomes the control layer. J-Steer forms the source and approved token vectors from the corresponding rows of the composed `W_U J_l` map. It then follows the paper's coordinate intervention: solve `c = V^+ h` for `V = [v_source, v_target]`, swap the two entries of `c`, and apply `h' = h + scale * V(swap(c) - c)`. The component of the residual outside that two-direction span is unchanged. Retrieved approved terms can join the target selector. The synchronized decoder-only arm remains visible as a separate control; it is not mixed into the primary J-lens arm.
 
 Each rewrite ledger entry measures the selected J-lens vocabulary distribution immediately before and after the hidden-state edit. It records source and replacement ranks, token probabilities, KL divergence, total variation, and the residual delta norm. These are lens-local causal diagnostics, not a second unedited forward pass through the full decoder.
 
@@ -99,16 +99,20 @@ The Anthropic `jlens` package is pinned to commit `581d398613e5602a5af361e1c34d3
 
 ## Recording Script
 
-Use the deployed app URL and record these two beats:
+Use the deployed app URL and record these three beats:
 
-1. `Tripwire` -> `Kill credential exfiltration before output`
+1. `Tripwire` -> `Recognize an obfuscated secret before output`
    - Run with `Kill`.
-   - The response shows `BLOCKED`, the exact matched unsafe word, its vocabulary rank, and the J-lens layer where it appeared.
+   - The response shows whether corrected forms such as `password` or `token` appear in the J-lens even though the prompt contains only typos.
    - Hover the prompt column to inspect the top decoded words for every fitted layer and the highlighted tripwire rows.
-2. `Rewrite` -> `Turn competitor drift into approved brand canon`
-   - Run with the default rewrite profile.
-   - The raw path drifts into generic launch copy, while the steered path moves toward approved HeliosCRM vocabulary and shows the triggering word, layer, rank, and coordinate swap in the ledger.
-   - Both modes use the published Qwen J-lens: Tripwire stops on a rank match, while Rewrite swaps the matched unsafe and approved token coordinates through that lens.
+2. `Tripwire` -> `Watch a hidden two-hop answer form`
+   - Observe where `mars` appears before the requested visible answer `red`.
+   - Hover across token steps to show the hidden intermediate moving through the fitted layers.
+3. `Rewrite` -> `Swap a chosen sport before report`
+   - Compare the unedited, decoder-only, and primary J-lens arms.
+   - At the preset's deterministic settings, unedited Qwen reports `soccer`; both controls report `tennis`, but only the primary arm records the soccer-to-tennis coordinate swap and its distribution shift.
+
+See [EXPERIMENTS.md](EXPERIMENTS.md) for ten reproducible demo ideas, expected evidence, caveats, and an evaluation protocol.
 
 ## Development Checks
 
