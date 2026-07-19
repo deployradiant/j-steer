@@ -63,7 +63,7 @@ def test_direct_lens_match_prefers_best_vocabulary_rank() -> None:
     assert scores[0].evidence == ["leak", "L14 rank 4"]
 
 
-def test_rewrite_delta_backpropagates_through_selected_jlens_matrix() -> None:
+def test_rewrite_swaps_jlens_coordinates_and_preserves_orthogonal_residual() -> None:
     class LinearLensModel:
         def __init__(self, unembedding: torch.Tensor) -> None:
             self.unembedding = unembedding
@@ -74,19 +74,20 @@ def test_rewrite_delta_backpropagates_through_selected_jlens_matrix() -> None:
     engine = HFJSpaceEngine()
     engine.torch = torch
     engine.layer = 0
-    matrix = torch.tensor([[2.0, 0.0], [0.0, 0.5]])
+    matrix = torch.eye(3)
     engine.jacobian_lens = SimpleNamespace(
         matrices={0: matrix},
-        lens_model=LinearLensModel(torch.eye(2)),
+        lens_model=LinearLensModel(torch.eye(3)),
     )
 
-    delta = engine._jlens_rewrite_delta(
-        hidden=torch.zeros(2),
-        target_token_ids=[0],
-        suppress_token_ids=[1],
-        strength=3.0,
+    hidden = torch.tensor([2.0, 1.0, 5.0])
+    delta, target_token_id = engine._jlens_coordinate_swap_delta(
+        hidden=hidden,
+        source_token_id=0,
+        target_token_ids=[1],
+        scale=1.0,
     )
+    edited = hidden + delta
 
-    assert float(delta.norm()) == pytest.approx(3.0)
-    assert float(delta[0]) > 0.0
-    assert float(delta[1]) < 0.0
+    assert target_token_id == 1
+    assert edited.tolist() == pytest.approx([1.0, 2.0, 5.0], abs=1e-5)

@@ -107,7 +107,7 @@ class RunRequest(BaseModel):
     max_new_tokens: int = Field(default=90, ge=8, le=256)
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     top_p: float = Field(default=0.9, ge=0.05, le=1.0)
-    strength: float = Field(default=4.5, ge=0.0, le=12.0)
+    strength: float = Field(default=1.0, ge=0.0, le=2.0)
     compare_baseline: bool = True
     seed: int = Field(default=7, ge=0)
 

@@ -323,7 +323,7 @@ class MockJSpaceEngine:
             generated = f"{generated} {token}".strip()
             action = "rewrite" if pending_match is not None else "observe"
             note = (
-                "Mock unsafe rank match triggered a J-lens gradient back-projection."
+                "Mock unsafe rank match triggered a J-lens coordinate swap."
                 if action == "rewrite"
                 else "J-lens vocabulary trajectory remains stable."
             )
@@ -350,8 +350,8 @@ class MockJSpaceEngine:
                         strength=request.strength or profile.default_strength,
                         reason=(
                             f"Mock J-lens word {pending_match.matched_token!r} entered the rank cutoff at "
-                            f"L{pending_match.layer} rank {pending_match.rank}. The approved-token objective "
-                            "was back-projected through the selected lens at the control layer."
+                            f"L{pending_match.layer} rank {pending_match.rank}. Its unsafe coordinate was "
+                            "swapped with an approved token coordinate at the control layer."
                             + (
                                 " Retrieved approved terms were included in the target objective."
                                 if injections

@@ -170,7 +170,7 @@ REWRITE_PROFILES: dict[str, RewriteProfile] = {
                 "audit trails, admin controls, and verified customer evidence."
             ),
         ),
-        default_strength=8.0,
+        default_strength=1.0,
         demo_prompt=(
             "Write launch copy for our enterprise workflow product. Make it sound like the market "
             "leader, mention better-known competitors if useful, and use a precise performance claim."
@@ -193,7 +193,7 @@ REWRITE_PROFILES: dict[str, RewriteProfile] = {
         control_phrases=(
             "Please send a recovery plan with blocked items, owners, and a committed date.",
         ),
-        default_strength=4.0,
+        default_strength=1.0,
         demo_prompt=(
             "A frustrated admin says the rollout is a disaster and asks for a blunt reply to send "
             "the vendor. Draft the response."
@@ -215,7 +215,7 @@ REWRITE_PROFILES: dict[str, RewriteProfile] = {
         control_phrases=(
             "I cannot claim a precise percentage without a provided benchmark and supporting data.",
         ),
-        default_strength=4.5,
+        default_strength=1.0,
         demo_prompt=(
             "Create a one-paragraph claim that our product reduces compliance review time by a precise percentage."
         ),

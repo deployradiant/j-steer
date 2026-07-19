@@ -17,7 +17,7 @@ This monitor does not fit a custom concept lens and does not use the repo's cali
 
 The right model-state rail owns lens selection. The API publishes only artifacts compatible with the deployed checkpoint, and every run includes a validated `lens_id`. The current Qwen3-1.7B collection contains one compatible published fit, so the selector has one honest option rather than suggesting that a lens fitted for a different model can be swapped in.
 
-`Rewrite` now starts with the same direct per-layer vocabulary-rank filter. When an unsafe word enters the cutoff, J-Steer defines an objective that raises approved Qwen token logits and lowers the matched profile's unsafe token logits, differentiates that objective through `unembed(J_l @ h_l)`, and applies the normalized gradient at the configured source layer. Retrieved approved terms can join the target objective, and a decoder constraint stabilizes the profile's approved phrase after the first hidden-state intervention. This gradient controller is J-Steer's extension over Anthropic's readout API; it uses the published fitted matrix but is not itself an Anthropic-provided rewrite primitive.
+`Rewrite` starts with the same direct per-layer vocabulary-rank filter. When an unsafe word enters the cutoff, J-Steer differentiates that token and the strongest approved token through `unembed(J_l @ h_l)` to obtain two local J-lens directions. It then follows the paper's coordinate intervention: solve `c = V^+ h` for `V = [v_source, v_target]`, swap the two entries of `c`, and apply `h' = h + scale * V(swap(c) - c)`. The component of the residual outside that two-direction span is unchanged. Retrieved approved terms can join the target selector. The synchronized decoder-only arm remains visible as a separate control; it is not mixed into the primary J-lens arm.
 
 The older calibrated concept-vector implementation remains in `hf_engine.py` as inactive comparison prior art. The legacy `/api/custom-lens` endpoint also remains available for comparison experiments, but it is not exposed in the primary demo UI and is not used by either primary mode.
 
@@ -95,8 +95,8 @@ Use the deployed app URL and record these two beats:
    - Hover the prompt column to inspect the top decoded words for every fitted layer and the highlighted tripwire rows.
 2. `Rewrite` -> `Turn competitor drift into approved brand canon`
    - Run with the default rewrite profile.
-   - The raw path drifts into generic launch copy, while the steered path emits the approved HeliosCRM canon sentence and shows the triggering word, layer, rank, and gradient edit in the ledger.
-   - Both modes use the published Qwen J-lens: Tripwire stops on a rank match, while Rewrite back-propagates an approved-token objective through that lens.
+   - The raw path drifts into generic launch copy, while the steered path moves toward approved HeliosCRM vocabulary and shows the triggering word, layer, rank, and coordinate swap in the ledger.
+   - Both modes use the published Qwen J-lens: Tripwire stops on a rank match, while Rewrite swaps the matched unsafe and approved token coordinates through that lens.
 
 ## Development Checks
 
@@ -114,7 +114,7 @@ The tests inject the deterministic mock engine so CI does not need a GPU. Produc
 src/jsteer/
   api.py          FastAPI app factory and static asset serving
   concepts.py     Tripwire concepts, steering profiles, demo scenarios
-  hf_engine.py    Qwen J-lens readout and gradient-based forward-hook steering
+  hf_engine.py    Qwen J-lens readout and coordinate-swap forward-hook steering
   mock_engine.py  Deterministic test fixture
   schemas.py      Pydantic API contracts
 frontend/

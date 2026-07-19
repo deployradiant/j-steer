@@ -237,7 +237,7 @@ const state: State = {
   selectedLensId: "anthropic-qwen3-1.7b-wikitext",
   maxNewTokens: 90,
   temperature: 0.7,
-  strength: 8.0,
+  strength: 1.0,
   profiles: null,
   health: null,
   result: null,
@@ -455,7 +455,7 @@ function renderRunControls(): string {
            ${numberControl("maxNewTokens", "Max Tokens", state.maxNewTokens, 8, 256, 1)}
            ${numberControl("temperature", "Temperature", state.temperature, 0, 2, 0.05)}`
         : `${numberControl("lensRankThreshold", "Rank Cutoff", state.lensRankThreshold, 1, 512, 1)}
-           ${rangeControl("strength", "J-lens Edit Strength", state.strength, 0, 12, 0.1)}
+           ${rangeControl("strength", "Coordinate Swap Scale", state.strength, 0, 2, 0.05)}
            ${numberControl("maxNewTokens", "Max Tokens", state.maxNewTokens, 8, 256, 1)}
            ${numberControl("temperature", "Temperature", state.temperature, 0, 2, 0.05)}`;
 
@@ -657,7 +657,7 @@ function tabButton(mode: AppMode, icon: string, label: string): string {
     .join(" ");
   const descriptions: Record<AppMode, string> = {
     monitor: "Detect and kill unsafe latent trajectories.",
-    rewrite: "Back-project approved tokens through the J-lens."
+    rewrite: "Swap unsafe and approved token coordinates through the J-lens."
   };
   return `
     <button data-tab="${mode}" class="${classes}" title="${escapeHtml(label)}" ${lockedAttr()}>
@@ -950,7 +950,7 @@ function renderRewriteComparison(response: RunResponse, frames: TraceFrame[], se
     },
     {
       label: "J-lens only",
-      detail: "Activation intervention without decoder forcing",
+      detail: "Two-coordinate J-lens swap without decoder forcing",
       output: response.output,
       frames
     },

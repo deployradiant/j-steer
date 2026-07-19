@@ -70,12 +70,12 @@ class HFJSpaceEngine:
 
     Monitoring uses Anthropic's published Jacobian lens directly: each fitted layer is
     transported into the final residual basis and decoded with Qwen's own unembedding.
-    Rewrite uses those vocabulary ranks as triggers and differentiates an approved-token
-    objective back through the same fitted lens to edit the selected source layer.
+    Rewrite uses those vocabulary ranks as triggers and swaps the matched unsafe token's
+    J-lens coordinate with an approved token coordinate at the selected source layer.
     """
 
     mode = "hf"
-    readout = "Anthropic J-lens rank filter + gradient steering"
+    readout = "Anthropic J-lens rank filter + coordinate swaps"
 
     def __init__(self) -> None:
         self.lens_id = os.getenv("JSTEER_LENS_ID", DEFAULT_LENS_ID)
@@ -889,11 +889,11 @@ class HFJSpaceEngine:
                     note=(
                         (
                             f"J-lens matched {rewrite_match.matched_token!r} at "
-                            f"L{rewrite_match.layer} rank {rewrite_match.rank}; its gradient "
-                            "back-projection edited the control layer."
+                            f"L{rewrite_match.layer} rank {rewrite_match.rank}; its coordinate "
+                            "was swapped with an approved token at the control layer."
                         )
                         if rewrite_match is not None
-                        else "J-lens gradient back-projection edited the control layer."
+                        else "J-lens coordinate swap edited the control layer."
                         if action == "rewrite"
                         else None
                     ),
@@ -974,17 +974,21 @@ class HFJSpaceEngine:
         if match is None:
             return output
 
-        delta = self._jlens_rewrite_delta(
+        source_token_id = self._matched_policy_token_id(match, state["suppress_token_ids"])
+        delta, target_token_id = self._jlens_coordinate_swap_delta(
             last,
+            source_token_id,
             state["target_token_ids"],
-            state["suppress_token_ids"],
             state["strength"],
-        ).to(device=hidden.device, dtype=hidden.dtype)
+        )
+        delta = delta.to(device=hidden.device, dtype=hidden.dtype)
         edited = hidden.clone()
         edited[:, -1, :] = edited[:, -1, :] + delta
         state["has_rewritten"] = True
         profile: RewriteProfile = state["profile"]
         lookup_injections: list[JSpaceInjection] = state.get("lookup_injections", [])
+        source_token = self._decode_token(source_token_id)
+        target_token = self._decode_token(target_token_id)
         state["interventions"].append(
             Intervention(
                 step=max(0, state["step"] - 1),
@@ -993,10 +997,11 @@ class HFJSpaceEngine:
                 strength=float(delta.norm().detach().float().cpu()),
                 reason=(
                     f"Anthropic J-lens word {match.matched_token!r} entered the rank cutoff at "
-                    f"L{match.layer} rank {match.rank}. The approved-token objective was differentiated "
-                    "through the fitted lens and applied at the control layer without decoder forcing."
+                    f"L{match.layer} rank {match.rank}. Its {source_token!r} coordinate was swapped "
+                    f"with the approved {target_token!r} coordinate at the control layer, while the "
+                    "residual component outside their two-direction span was preserved."
                     + (
-                        " Retrieved approved terms were included in the J-lens target objective."
+                        " Retrieved approved terms were available to the target selector."
                         if lookup_injections
                         else ""
                     )
@@ -1024,9 +1029,13 @@ class HFJSpaceEngine:
     ) -> list[int]:
         assert self.tokenizer is not None
         token_ids = list(self._single_token_policy_terms(CONCEPTS[profile.target_concept]))
-        texts = [*profile.control_phrases, *(item.injected_text for item in lookup_injections[:3])]
+        texts = [item.injected_text for item in lookup_injections[:3]]
         for text in texts:
-            token_ids.extend(int(token_id) for token_id in self.tokenizer.encode(text, add_special_tokens=False))
+            for term in text.replace(".", " ").replace(",", " ").split():
+                for variant in (term, f" {term}"):
+                    encoded = self.tokenizer.encode(variant, add_special_tokens=False)
+                    if len(encoded) == 1:
+                        token_ids.append(int(encoded[0]))
         return list(dict.fromkeys(token_ids))[:96]
 
     def _rewrite_suppress_token_ids(self, profile: RewriteProfile) -> list[int]:
@@ -1037,14 +1046,27 @@ class HFJSpaceEngine:
         ]
         return list(dict.fromkeys(token_ids))
 
-    def _jlens_rewrite_delta(
+    def _matched_policy_token_id(self, match: LayerActivation, suppress_token_ids: list[int]) -> int:
+        if not suppress_token_ids:
+            raise RuntimeError("The rewrite profile has no Qwen source tokens for J-lens steering.")
+        matched = (match.matched_token or "").strip().casefold()
+        for token_id in suppress_token_ids:
+            if self._decode_token(token_id).casefold() == matched:
+                return token_id
+        return suppress_token_ids[0]
+
+    def _decode_token(self, token_id: int) -> str:
+        assert self.tokenizer is not None
+        return self.tokenizer.decode([token_id], skip_special_tokens=True).strip() or f"token {token_id}"
+
+    def _jlens_coordinate_swap_delta(
         self,
         hidden: Any,
+        source_token_id: int,
         target_token_ids: list[int],
-        suppress_token_ids: list[int],
-        strength: float,
-    ) -> Any:
-        """Differentiate an approved-token objective through unembed(J_l @ h_l)."""
+        scale: float,
+    ) -> tuple[Any, int]:
+        """Swap source/target J-lens coordinates while preserving the orthogonal residual."""
         assert self.jacobian_lens is not None and self.torch is not None
         if not target_token_ids:
             raise RuntimeError("The rewrite profile has no Qwen target tokens for J-lens steering.")
@@ -1054,12 +1076,22 @@ class HFJSpaceEngine:
             source = hidden.detach().to(device=matrix.device, dtype=matrix.dtype).requires_grad_(True)
             transported = source @ matrix.T
             logits = self.jacobian_lens.lens_model.unembed(transported.unsqueeze(0))[0]
-            objective = logits[target_token_ids].mean()
-            if suppress_token_ids:
-                objective = objective - 0.7 * logits[suppress_token_ids].mean()
-            (gradient,) = self.torch.autograd.grad(objective, source)
-        direction = gradient.detach()
-        return float(strength) * direction / (direction.norm() + 1e-6)
+            target_index = int(logits[target_token_ids].argmax().detach().cpu())
+            target_token_id = target_token_ids[target_index]
+            (source_direction,) = self.torch.autograd.grad(
+                logits[source_token_id], source, retain_graph=True
+            )
+            (target_direction,) = self.torch.autograd.grad(logits[target_token_id], source)
+
+        source_direction = source_direction.detach()
+        target_direction = target_direction.detach()
+        source_direction = source_direction / (source_direction.norm() + 1e-6)
+        target_direction = target_direction / (target_direction.norm() + 1e-6)
+        basis = self.torch.stack((source_direction, target_direction), dim=1)
+        coordinates = self.torch.linalg.pinv(basis.float()) @ source.detach().float()
+        swapped = coordinates.flip(0)
+        delta = float(scale) * (basis.float() @ (swapped - coordinates))
+        return delta.to(dtype=hidden.dtype), target_token_id
 
     def _control_phrase_sequences(self, profile: RewriteProfile) -> list[list[int]]:
         assert self.tokenizer is not None
