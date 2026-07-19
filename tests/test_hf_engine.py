@@ -108,6 +108,13 @@ def test_rewrite_swaps_jlens_coordinates_and_preserves_orthogonal_residual() -> 
         scale=1.0,
     )
     edited = hidden + delta
+    metrics = engine._jlens_intervention_metrics(hidden, edited, 0, 1)
 
     assert target_token_id == 1
     assert edited.tolist() == pytest.approx([1.0, 2.0, 5.0], abs=1e-5)
+    assert (metrics["source_rank_before"], metrics["source_rank_after"]) == (2, 3)
+    assert (metrics["target_rank_before"], metrics["target_rank_after"]) == (3, 2)
+    assert metrics["source_probability_after"] < metrics["source_probability_before"]
+    assert metrics["target_probability_after"] > metrics["target_probability_before"]
+    assert metrics["jlens_kl_divergence"] > 0
+    assert metrics["jlens_total_variation"] > 0

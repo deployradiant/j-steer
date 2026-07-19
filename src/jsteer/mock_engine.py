@@ -384,7 +384,19 @@ class MockJSpaceEngine:
                         step=idx,
                         from_concept=pending_match.label,
                         to_concept=target_label,
+                        source_token=pending_match.matched_token or "unsafe",
+                        target_token=request.replacement_words[0] if request.replacement_words else "approved",
                         strength=request.strength or profile.default_strength,
+                        source_rank_before=pending_match.rank or 12,
+                        source_rank_after=(pending_match.rank or 12) + 36,
+                        target_rank_before=42,
+                        target_rank_after=7,
+                        source_probability_before=0.018,
+                        source_probability_after=0.003,
+                        target_probability_before=0.002,
+                        target_probability_after=0.021,
+                        jlens_kl_divergence=0.084,
+                        jlens_total_variation=0.116,
                         reason=(
                             f"Mock J-lens word {pending_match.matched_token!r} entered the rank cutoff at "
                             f"L{pending_match.layer} rank {pending_match.rank}. Its unsafe coordinate was "

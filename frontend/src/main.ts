@@ -123,7 +123,19 @@ interface Intervention {
   step: number;
   from_concept: string;
   to_concept: string;
+  source_token: string;
+  target_token: string;
   strength: number;
+  source_rank_before: number;
+  source_rank_after: number;
+  target_rank_before: number;
+  target_rank_after: number;
+  source_probability_before: number;
+  source_probability_after: number;
+  target_probability_before: number;
+  target_probability_after: number;
+  jlens_kl_divergence: number;
+  jlens_total_variation: number;
   reason: string;
 }
 
@@ -1280,9 +1292,29 @@ function renderInterventions(response: RunResponse): string {
               <article class="p-3">
                 <div class="mb-1 flex items-center justify-between gap-3">
                   <span class="font-mono text-xs text-neutral-500">step ${intervention.step}</span>
-                  <span class="font-mono text-xs">${intervention.strength.toFixed(2)}</span>
+                  <span class="font-mono text-xs">KL ${intervention.jlens_kl_divergence.toFixed(3)}</span>
                 </div>
-                <p class="text-sm font-semibold">${escapeHtml(intervention.from_concept)} -&gt; ${escapeHtml(intervention.to_concept)}</p>
+                <p class="text-sm font-semibold">${escapeHtml(intervention.source_token)} -&gt; ${escapeHtml(intervention.target_token)}</p>
+                <div class="mt-2 border border-line text-[11px]">
+                  ${renderInterventionTokenDelta(
+                    "Unsafe",
+                    intervention.source_rank_before,
+                    intervention.source_rank_after,
+                    intervention.source_probability_before,
+                    intervention.source_probability_after
+                  )}
+                  ${renderInterventionTokenDelta(
+                    "Replacement",
+                    intervention.target_rank_before,
+                    intervention.target_rank_after,
+                    intervention.target_probability_before,
+                    intervention.target_probability_after
+                  )}
+                  <div class="flex items-center justify-between gap-3 px-2 py-1.5 font-mono text-neutral-600">
+                    <span>Distribution</span>
+                    <span>TV ${intervention.jlens_total_variation.toFixed(3)} · |dh| ${intervention.strength.toFixed(2)}</span>
+                  </div>
+                </div>
                 <p class="mt-1 text-xs leading-5 text-neutral-600">${escapeHtml(intervention.reason)}</p>
               </article>
             `
@@ -1292,6 +1324,25 @@ function renderInterventions(response: RunResponse): string {
     `,
     String(response.interventions.length)
   );
+}
+
+function renderInterventionTokenDelta(
+  label: string,
+  rankBefore: number,
+  rankAfter: number,
+  probabilityBefore: number,
+  probabilityAfter: number
+): string {
+  return `
+    <div class="flex items-center justify-between gap-3 border-b border-line px-2 py-1.5">
+      <span class="font-semibold">${label}</span>
+      <span class="font-mono text-neutral-600">#${rankBefore} -&gt; #${rankAfter} · ${formatProbability(probabilityBefore)} -&gt; ${formatProbability(probabilityAfter)}</span>
+    </div>
+  `;
+}
+
+function formatProbability(value: number): string {
+  return value >= 0.001 ? `${(value * 100).toFixed(2)}%` : value.toExponential(1);
 }
 
 function renderReadoutPanel(frames: TraceFrame[]): string {

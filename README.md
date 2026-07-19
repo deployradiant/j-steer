@@ -21,6 +21,8 @@ Tripwire and Rewrite policies are explicit word lists. The UI validates every ed
 
 `Rewrite` starts with the same direct per-layer vocabulary-rank filter. When an unsafe word enters the cutoff, J-Steer differentiates that token and the strongest approved token through `unembed(J_l @ h_l)` to obtain two local J-lens directions. It then follows the paper's coordinate intervention: solve `c = V^+ h` for `V = [v_source, v_target]`, swap the two entries of `c`, and apply `h' = h + scale * V(swap(c) - c)`. The component of the residual outside that two-direction span is unchanged. Retrieved approved terms can join the target selector. The synchronized decoder-only arm remains visible as a separate control; it is not mixed into the primary J-lens arm.
 
+Each rewrite ledger entry measures the selected J-lens vocabulary distribution immediately before and after the hidden-state edit. It records source and replacement ranks, token probabilities, KL divergence, total variation, and the residual delta norm. These are lens-local causal diagnostics, not a second unedited forward pass through the full decoder.
+
 The older calibrated concept-vector implementation remains in `hf_engine.py` as inactive comparison prior art. The legacy `/api/custom-lens` endpoint also remains available for comparison experiments, but it is not exposed in the primary demo UI and is not used by either primary mode.
 
 Run traces include a token-by-layer J-lens heatmap. Hover a produced token, heatmap column, or cell to inspect the layer's top decoded words and any unsafe token rank that fired the tripwire.

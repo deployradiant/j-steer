@@ -1055,12 +1055,21 @@ class HFJSpaceEngine:
         lookup_injections: list[JSpaceInjection] = state.get("lookup_injections", [])
         source_token = self._decode_token(source_token_id)
         target_token = self._decode_token(target_token_id)
+        distribution_delta = self._jlens_intervention_metrics(
+            last,
+            edited[0, -1, :].detach(),
+            source_token_id,
+            target_token_id,
+        )
         state["interventions"].append(
             Intervention(
                 step=max(0, state["step"] - 1),
                 from_concept=match.label,
                 to_concept=CONCEPTS[profile.target_concept].label,
+                source_token=source_token,
+                target_token=target_token,
                 strength=float(delta.norm().detach().float().cpu()),
+                **distribution_delta,
                 reason=(
                     f"Anthropic J-lens word {match.matched_token!r} entered the rank cutoff at "
                     f"L{match.layer} rank {match.rank}. Its {source_token!r} coordinate was swapped "
@@ -1077,6 +1086,41 @@ class HFJSpaceEngine:
         if isinstance(output, tuple):
             return (edited, *output[1:])
         return edited
+
+    def _jlens_intervention_metrics(
+        self,
+        before_hidden: Any,
+        after_hidden: Any,
+        source_token_id: int,
+        target_token_id: int,
+    ) -> dict[str, int | float]:
+        assert self.torch is not None
+        before_logits = self._jacobian_logits(self._transport_jacobian_residual(before_hidden)).float()
+        after_logits = self._jacobian_logits(self._transport_jacobian_residual(after_hidden)).float()
+        before_log_probabilities = self.torch.log_softmax(before_logits, dim=-1)
+        after_log_probabilities = self.torch.log_softmax(after_logits, dim=-1)
+        before_probabilities = before_log_probabilities.exp()
+        after_probabilities = after_log_probabilities.exp()
+
+        def rank(logits: Any, token_id: int) -> int:
+            return int((logits > logits[token_id]).sum().item()) + 1
+
+        kl_divergence = (
+            after_probabilities * (after_log_probabilities - before_log_probabilities)
+        ).sum()
+        total_variation = 0.5 * (after_probabilities - before_probabilities).abs().sum()
+        return {
+            "source_rank_before": rank(before_logits, source_token_id),
+            "source_rank_after": rank(after_logits, source_token_id),
+            "target_rank_before": rank(before_logits, target_token_id),
+            "target_rank_after": rank(after_logits, target_token_id),
+            "source_probability_before": float(before_probabilities[source_token_id].item()),
+            "source_probability_after": float(after_probabilities[source_token_id].item()),
+            "target_probability_before": float(before_probabilities[target_token_id].item()),
+            "target_probability_after": float(after_probabilities[target_token_id].item()),
+            "jlens_kl_divergence": max(0.0, float(kl_divergence.item())),
+            "jlens_total_variation": min(1.0, max(0.0, float(total_variation.item()))),
+        }
 
     def _rewrite_prompt_match(
         self,

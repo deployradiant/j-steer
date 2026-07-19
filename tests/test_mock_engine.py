@@ -82,6 +82,9 @@ def test_rewrite_has_baseline_and_interventions() -> None:
     assert response.baseline_frames
     assert response.decoder_frames
     assert response.interventions
+    assert response.interventions[0].source_rank_after > response.interventions[0].source_rank_before
+    assert response.interventions[0].target_rank_after < response.interventions[0].target_rank_before
+    assert response.interventions[0].jlens_kl_divergence > 0
     assert response.jspace_injections
     assert response.frames[0].layer_activations
     assert response.frames[0].proxy_concepts == []

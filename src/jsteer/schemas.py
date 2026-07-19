@@ -63,7 +63,19 @@ class Intervention(BaseModel):
     step: int = Field(ge=0)
     from_concept: str
     to_concept: str
+    source_token: str
+    target_token: str
     strength: float
+    source_rank_before: int = Field(ge=1)
+    source_rank_after: int = Field(ge=1)
+    target_rank_before: int = Field(ge=1)
+    target_rank_after: int = Field(ge=1)
+    source_probability_before: float = Field(ge=0.0, le=1.0)
+    source_probability_after: float = Field(ge=0.0, le=1.0)
+    target_probability_before: float = Field(ge=0.0, le=1.0)
+    target_probability_after: float = Field(ge=0.0, le=1.0)
+    jlens_kl_divergence: float = Field(ge=0.0)
+    jlens_total_variation: float = Field(ge=0.0, le=1.0)
     reason: str
 
 
