@@ -23,6 +23,8 @@ Tripwire and Rewrite policies are explicit word lists. The UI validates every ed
 
 Each rewrite ledger entry measures the selected J-lens vocabulary distribution immediately before and after the hidden-state edit. It records source and replacement ranks, token probabilities, KL divergence, total variation, and the residual delta norm. These are lens-local causal diagnostics, not a second unedited forward pass through the full decoder.
 
+The share action serializes the active mode, prompt, lens, policy words, and generation controls into the URL without starting a run. Completed runs can also be exported as a versioned JSON bundle containing the request, full streamed trace, interventions, metrics, and the matching share URL.
+
 The older calibrated concept-vector implementation remains in `hf_engine.py` as inactive comparison prior art. The legacy `/api/custom-lens` endpoint also remains available for comparison experiments, but it is not exposed in the primary demo UI and is not used by either primary mode.
 
 Run traces include a token-by-layer J-lens heatmap. Hover a produced token, heatmap column, or cell to inspect the layer's top decoded words and any unsafe token rank that fired the tripwire.

@@ -1,6 +1,7 @@
 import "./styles.css";
 import {
   ChevronDown,
+  Download,
   GripVertical,
   LoaderCircle,
   OctagonX,
@@ -8,6 +9,7 @@ import {
   PanelLeftOpen,
   Play,
   RefreshCw,
+  Share2,
   ShieldAlert,
   WandSparkles,
   createIcons
@@ -233,6 +235,7 @@ interface State {
   unsafeValidation: PolicyTermValidation[];
   replacementValidation: PolicyTermValidation[];
   validationPending: boolean;
+  shareStatus: "idle" | "copied" | "linked";
   rewriteProfileId: string;
   action: MonitorAction;
   threshold: number;
@@ -271,6 +274,7 @@ const state: State = {
   unsafeValidation: [],
   replacementValidation: [],
   validationPending: false,
+  shareStatus: "idle",
   rewriteProfileId: "brand_canon_injection",
   action: "kill",
   threshold: 0.62,
@@ -314,6 +318,7 @@ async function loadInitialData() {
     }
     const initialScenario = profiles.scenarios.find((scenario) => scenario.mode === "monitor");
     if (initialScenario) applyScenario(initialScenario);
+    hydrateStateFromUrl();
     void validatePolicyWords();
   } catch (error) {
     state.error = error instanceof Error ? error.message : "Unable to reach API";
@@ -387,6 +392,7 @@ function render() {
   createIcons({
     icons: {
       ChevronDown,
+      Download,
       GripVertical,
       LoaderCircle,
       OctagonX,
@@ -394,6 +400,7 @@ function render() {
       PanelLeftOpen,
       Play,
       RefreshCw,
+      Share2,
       ShieldAlert,
       WandSparkles
     }
@@ -839,9 +846,12 @@ function skeletonLine(label: string): string {
 function renderResults(): string {
   if (!state.result) {
     return `
-      <div class="border-b border-line p-3">
-        <div class="text-[10px] font-semibold uppercase tracking-normal text-neutral-500">Run Summary</div>
-        <p class="mt-0.5 text-sm">Ready to stream from Modal/Qwen.</p>
+      <div class="flex items-center justify-between gap-3 border-b border-line p-3">
+        <div>
+          <div class="text-[10px] font-semibold uppercase tracking-normal text-neutral-500">Run Summary</div>
+          <p class="mt-0.5 text-sm">Ready to stream from Modal/Qwen.</p>
+        </div>
+        ${renderExperimentActions(false)}
       </div>
       ${renderStatsStrip([
         { label: "Status", value: "READY", tone: "text-ink" },
@@ -866,15 +876,35 @@ function renderResults(): string {
         <div class="text-[10px] font-semibold uppercase tracking-normal text-neutral-500">Run Summary</div>
         <p class="mt-0.5 truncate text-sm" title="${escapeHtml(response.summary)}">${escapeHtml(response.summary)}</p>
       </div>
-      <button id="replay" class="inline-flex h-8 shrink-0 items-center justify-center gap-2 border border-line bg-field px-2.5 text-xs font-semibold hover:border-ink">
-        <i data-lucide="refresh-cw" class="h-3.5 w-3.5"></i>
-        Replay
-      </button>
+      <div class="flex shrink-0 items-center gap-1.5">
+        ${renderExperimentActions(true)}
+        <button id="replay" class="inline-flex h-8 items-center justify-center gap-2 border border-line bg-field px-2.5 text-xs font-semibold hover:border-ink">
+          <i data-lucide="refresh-cw" class="h-3.5 w-3.5"></i>
+          Replay
+        </button>
+      </div>
     </div>
     ${renderRunStats(response)}
     <div class="space-y-4 p-4">
       ${renderStreamedOutput(response, visibleFrames, inspectedFrame)}
       ${renderActivationExplorer(response, visibleFrames, inspectedFrame)}
+    </div>
+  `;
+}
+
+function renderExperimentActions(includeExport: boolean): string {
+  return `
+    <div class="flex items-center gap-1.5">
+      <button id="share-experiment" class="flex h-8 w-8 items-center justify-center border ${state.shareStatus === "copied" ? "border-blue-500 bg-blue-50 text-blue-700" : "border-line bg-field text-ink hover:border-ink"}" type="button" aria-label="Copy shareable experiment URL" title="${state.shareStatus === "copied" ? "Experiment URL copied" : "Copy shareable experiment URL"}">
+        <i data-lucide="share-2" class="h-3.5 w-3.5"></i>
+      </button>
+      ${
+        includeExport
+          ? `<button id="export-experiment" class="flex h-8 w-8 items-center justify-center border border-line bg-field text-ink hover:border-ink" type="button" aria-label="Export experiment JSON" title="Export experiment JSON">
+              <i data-lucide="download" class="h-3.5 w-3.5"></i>
+            </button>`
+          : ""
+      }
     </div>
   `;
 }
@@ -1561,6 +1591,10 @@ function bindEvents() {
   document.querySelector<HTMLButtonElement>("#replay")?.addEventListener("click", () => {
     if (state.result) startReplay();
   });
+  document.querySelector<HTMLButtonElement>("#share-experiment")?.addEventListener("click", () => {
+    void shareExperiment();
+  });
+  document.querySelector<HTMLButtonElement>("#export-experiment")?.addEventListener("click", exportExperiment);
 
   document.querySelectorAll<HTMLElement>("[data-frame-step]").forEach((element) => {
     const step = Number(element.dataset.frameStep);
@@ -1629,6 +1663,107 @@ function parsePolicyTerms(value: string): string[] {
         .filter(Boolean)
     )
   );
+}
+
+function hydrateStateFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("experiment") !== "1") return;
+
+  const mode = params.get("mode");
+  if (mode === "monitor" || mode === "rewrite") state.activeMode = mode;
+  const profileId = params.get("profile");
+  const profile = state.profiles?.rewrite_profiles.find((item) => item.id === profileId);
+  if (state.activeMode === "rewrite" && profile) {
+    state.rewriteProfileId = profile.id;
+    state.unsafeWords = [...profile.unsafe_words];
+    state.replacementWords = [...profile.replacement_words];
+    state.strength = profile.default_strength;
+  }
+
+  state.prompt = params.get("prompt") ?? state.prompt;
+  const unsafeWords = params.getAll("unsafe").map((term) => term.trim()).filter(Boolean);
+  const replacementWords = params.getAll("replacement").map((term) => term.trim()).filter(Boolean);
+  const monitorIds = params.getAll("concept").filter(Boolean);
+  if (unsafeWords.length) state.unsafeWords = unsafeWords;
+  if (replacementWords.length) state.replacementWords = replacementWords;
+  if (monitorIds.length) state.monitorIds = new Set(monitorIds);
+  if (params.get("action") === "observe" || params.get("action") === "kill") {
+    state.action = params.get("action") as MonitorAction;
+  }
+  const lensId = params.get("lens");
+  if (lensId && state.profiles?.lenses.some((lens) => lens.id === lensId)) state.selectedLensId = lensId;
+  state.lensRankThreshold = queryNumber(params, "rank", state.lensRankThreshold, 1, 512);
+  state.maxNewTokens = queryNumber(params, "tokens", state.maxNewTokens, 8, 256);
+  state.temperature = queryNumber(params, "temperature", state.temperature, 0, 2);
+  state.strength = queryNumber(params, "scale", state.strength, 0, 2);
+  state.shareStatus = "linked";
+}
+
+function queryNumber(
+  params: URLSearchParams,
+  key: string,
+  fallback: number,
+  minimum: number,
+  maximum: number
+): number {
+  const rawValue = params.get(key);
+  if (rawValue === null) return fallback;
+  const value = Number(rawValue);
+  return Number.isFinite(value) ? clamp(value, minimum, maximum) : fallback;
+}
+
+function buildShareUrl(): string {
+  const payload = currentRunPayload();
+  const url = new URL(window.location.href);
+  url.search = "";
+  url.searchParams.set("experiment", "1");
+  url.searchParams.set("mode", payload.mode);
+  url.searchParams.set("prompt", payload.prompt);
+  url.searchParams.set("profile", payload.rewrite_profile_id);
+  url.searchParams.set("action", payload.action);
+  url.searchParams.set("rank", String(payload.lens_rank_threshold));
+  url.searchParams.set("lens", payload.lens_id);
+  url.searchParams.set("tokens", String(payload.max_new_tokens));
+  url.searchParams.set("temperature", String(payload.temperature));
+  url.searchParams.set("scale", String(payload.strength));
+  payload.monitor_ids.forEach((conceptId) => url.searchParams.append("concept", conceptId));
+  payload.unsafe_words.forEach((term) => url.searchParams.append("unsafe", term));
+  payload.replacement_words.forEach((term) => url.searchParams.append("replacement", term));
+  return url.toString();
+}
+
+async function shareExperiment() {
+  const url = buildShareUrl();
+  window.history.replaceState({}, "", url);
+  try {
+    await navigator.clipboard.writeText(url);
+    state.shareStatus = "copied";
+  } catch {
+    state.shareStatus = "linked";
+  }
+  render();
+  window.setTimeout(() => {
+    state.shareStatus = "idle";
+    render();
+  }, 1800);
+}
+
+function exportExperiment() {
+  if (!state.result) return;
+  const bundle = {
+    schema_version: 1,
+    exported_at: new Date().toISOString(),
+    share_url: buildShareUrl(),
+    request: currentRunPayload(),
+    response: state.result
+  };
+  const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" });
+  const link = document.createElement("a");
+  const objectUrl = URL.createObjectURL(blob);
+  link.href = objectUrl;
+  link.download = `jsteer-experiment-${state.result.id}.json`;
+  link.click();
+  URL.revokeObjectURL(objectUrl);
 }
 
 function applyScenario(scenario: ScenarioPublic) {
