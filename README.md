@@ -2,6 +2,8 @@
 
 J-Steer is a demo control plane for monitoring and steering an open Qwen model through hidden-state interventions. It runs on Modal by default: FastAPI serves the API and built HTML/Tailwind demo, while Qwen and its matched Jacobian lens run on a GPU-backed Modal function.
 
+**Live demo:** https://koogle-frick--radiant-jsteer.modal.run
+
 ## What This Implements
 
 The primary `Tripwire` path uses Anthropic's published `jlens` implementation and the pre-fitted Neuronpedia Qwen3-1.7B Jacobian lens directly:
@@ -62,6 +64,12 @@ Modal prints the public web URL. Open that URL for the recordable demo.
 ```bash
 cd frontend && npm run build && cd ..
 uv run modal deploy -m modal_app
+```
+
+The deployed Web Function uses the stable `radiant-jsteer` endpoint label. To attach a domain already registered in the active Modal workspace:
+
+```bash
+JSTEER_CUSTOM_DOMAIN=jsteer.radiantai.com uv run modal deploy -m modal_app
 ```
 
 Defaults:

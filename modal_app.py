@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import modal
 
 APP_NAME = "j-steer"
+WEB_LABEL = "radiant-jsteer"
+CUSTOM_DOMAIN = os.getenv("JSTEER_CUSTOM_DOMAIN")
 ROOT = Path(__file__).parent
 FRONTEND_DIST = ROOT / "frontend" / "dist"
 
@@ -52,7 +55,10 @@ hf_cache = modal.Volume.from_name(f"{APP_NAME}-hf-cache", create_if_missing=True
     scaledown_window=300,
     volumes={"/root/.cache/huggingface": hf_cache},
 )
-@modal.asgi_app()
+@modal.asgi_app(
+    label=WEB_LABEL,
+    custom_domains=[CUSTOM_DOMAIN] if CUSTOM_DOMAIN else None,
+)
 def web():
     from jsteer.api import create_app
 
