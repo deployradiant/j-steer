@@ -2,6 +2,8 @@
 
 J-Steer is a demo control plane for monitoring and steering an open Qwen model through hidden-state interventions. It runs on Modal by default: FastAPI serves the API and built HTML/Tailwind demo, while Qwen and its matched Jacobian lens run on a GPU-backed Modal function.
 
+Licensed under Apache-2.0. This is a research demo, not a production content-safety or data-loss-prevention boundary.
+
 **Live demo:** https://koogle-frick--radiant-jsteer.modal.run
 
 ## What This Implements
@@ -50,8 +52,8 @@ Run traces include a token-by-layer J-lens heatmap. Hover a produced token, heat
 ## Install
 
 ```bash
-uv sync --group dev
-cd frontend && npm install && cd ..
+uv sync --locked --group dev
+npm ci --prefix frontend
 ```
 
 ## Serve On Modal
@@ -81,8 +83,10 @@ JSTEER_CUSTOM_DOMAIN=jsteer.radiantai.com uv run modal deploy -m modal_app
 Defaults:
 
 - Model: `Qwen/Qwen3-1.7B`
+- Model revision: `70d244cc86ccca08cf5af4e1e306ecf908b1ad5e`
 - Lens ID: `anthropic-qwen3-1.7b-wikitext`
 - Jacobian lens repo: `neuronpedia/jacobian-lens`
+- Jacobian lens revision: `a4114d7752d11eb546e6cf372213d7e75526d3a1`
 - Jacobian lens artifact: `qwen3-1.7b/jlens/Salesforce-wikitext/Qwen3-1.7B_jacobian_lens.pt`
 - Jacobian lens target model: `Qwen/Qwen3-1.7B`
 - GPU: `L4`
@@ -90,6 +94,8 @@ Defaults:
 - Rewrite control layer: 58% through the decoder stack unless `JSTEER_LAYER` is set
 
 The J-lens matrix must match the exact model checkpoint. The runtime checks the configured target model (`JSTEER_JLENS_MODEL`), the lens artifact metadata (`hf_model_name` in `config.yaml` when present), and the lens hidden size before using the artifact. `Qwen/Qwen3-0.6B` has a different residual width and is not compatible with the published Qwen3-1.7B lens.
+
+The Anthropic `jlens` package is pinned to commit `581d398613e5602a5af361e1c34d3a92ea82ba8e`. Modal installs the frozen `uv.lock`, model loading disables remote repository code, APIs are same-origin by default, and model-backed requests are serialized per GPU container. Set `JSTEER_CORS_ORIGINS` to a comma-separated allowlist only when a separate trusted frontend requires it.
 
 ## Recording Script
 
@@ -113,6 +119,12 @@ uv run ruff check .
 ```
 
 The tests inject the deterministic mock engine so CI does not need a GPU. Product serving uses the real Qwen engine through Modal by default.
+
+## Contributing and Security
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development and review requirements, [SECURITY.md](SECURITY.md) for private vulnerability reporting and deployment limitations, and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for runtime artifact licenses.
+
+Do not enter real credentials, personal data, customer records, or proprietary documents in the public demo. Exported experiment JSON contains the complete prompt, output, and trace.
 
 ## Project Layout
 

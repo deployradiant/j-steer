@@ -60,6 +60,7 @@ interface LensPublic {
   label: string;
   description: string;
   source: string;
+  revision: string;
   artifact: string;
   target_model: string;
   dataset: string;
@@ -164,6 +165,7 @@ interface RunResponse {
   engine: {
     mode: string;
     model: string;
+    model_revision: string;
     layer: number;
     device: string;
     readout: string;
@@ -577,6 +579,7 @@ function renderLensPickerControls(): string {
         ? `<div class="model-state-values text-xs">
             ${stateValueRow("Fit corpus", selected.dataset)}
             ${stateValueRow("Lens layers", String(selected.fitted_layers))}
+            ${stateValueRow("Lens snapshot", selected.revision.slice(0, 12))}
             ${stateValueRow("Lens status", `${lensPairText()} / ${lensStatusText()}`, true)}
           </div>`
         : ""
@@ -618,6 +621,7 @@ function renderModelStatePanel(): string {
       <div class="model-state-values text-xs">
         ${stateValueRow("Runtime", runtime)}
         ${stateValueRow("Model", engine?.model ?? "Qwen/Qwen3-1.7B")}
+        ${stateValueRow("Model snapshot", engine?.model_revision?.slice(0, 12) ?? "loading")}
         ${stateValueRow("Readout", engine?.readout ?? "hidden-state")}
         ${stateValueRow("Layer Policy", state.activeMode === "monitor" ? "All fitted" : `L${engine?.layer ?? 15}`)}
         ${stateValueRow("Device", engine?.device ?? "Modal GPU")}
@@ -1934,6 +1938,7 @@ function streamingEngineInfo(): RunResponse["engine"] {
     state.health?.engine ?? {
       mode: "loading",
       model: "Qwen/Qwen3-1.7B",
+      model_revision: "70d244cc86cc",
       layer: 15,
       device: "Modal GPU",
       readout: "hidden-state",

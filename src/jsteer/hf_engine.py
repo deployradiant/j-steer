@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .concepts import CONCEPTS, REWRITE_PROFILES, ConceptSpec, RewriteProfile
-from .lenses import DEFAULT_LENS_ID, LENSES
+from .lenses import DEFAULT_LENS_ID, JLENS_ARTIFACT_REVISION, LENSES, QWEN_MODEL_REVISION
 from .lookups import lookup_jspace_injections
 from .schemas import (
     ConceptPolarity,
@@ -87,8 +87,10 @@ class HFJSpaceEngine:
             available = ", ".join(sorted(LENSES))
             raise ValueError(f"Unsupported JSTEER_LENS_ID={self.lens_id!r}. Available lenses: {available}.")
         self.model_name = os.getenv("JSTEER_MODEL", "Qwen/Qwen3-1.7B")
+        self.model_revision = os.getenv("JSTEER_MODEL_REVISION", QWEN_MODEL_REVISION)
         self.lens_label = lens_spec.label
         self.lens_source = os.getenv("JSTEER_JLENS_REPO", lens_spec.source)
+        self.lens_revision = os.getenv("JSTEER_JLENS_REVISION", JLENS_ARTIFACT_REVISION)
         self.lens_artifact = os.getenv(
             "JSTEER_JLENS_FILE",
             lens_spec.artifact,
@@ -110,6 +112,7 @@ class HFJSpaceEngine:
         return EngineInfo(
             mode=self.mode,
             model=self.model_name,
+            model_revision=self.model_revision,
             layer=max(self.layer, 0),
             device=self.device,
             readout=self.readout,
@@ -287,12 +290,17 @@ class HFJSpaceEngine:
         if os.getenv("JSTEER_DEVICE", "").lower() == "cpu":
             device_map = None
 
-        self.tokenizer = AutoTokenizer.from_pretrained(self.model_name, trust_remote_code=True)
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            self.model_name,
+            revision=self.model_revision,
+            trust_remote_code=False,
+        )
         self.model = AutoModelForCausalLM.from_pretrained(
             self.model_name,
+            revision=self.model_revision,
             torch_dtype=dtype,
             device_map=device_map,
-            trust_remote_code=True,
+            trust_remote_code=False,
         )
         if device_map is None:
             self.model.to("cpu")
@@ -313,6 +321,7 @@ class HFJSpaceEngine:
                 available=True,
                 status="ready",
                 source=self.jacobian_lens.source,
+                revision=self.lens_revision,
                 artifact=self.jacobian_lens.artifact,
                 target_model=self.jacobian_lens.target_model,
                 metadata_model=self.jacobian_lens.metadata_model,
@@ -329,6 +338,7 @@ class HFJSpaceEngine:
                 available=False,
                 status="unavailable",
                 source=self.lens_source,
+                revision=self.lens_revision,
                 artifact=self.lens_artifact,
                 target_model=self.lens_target_model,
                 metadata_model=None,
@@ -341,6 +351,7 @@ class HFJSpaceEngine:
             available=False,
             status="configured",
             source=self.lens_source,
+            revision=self.lens_revision,
             artifact=self.lens_artifact,
             target_model=self.lens_target_model,
             metadata_model=None,
@@ -370,7 +381,11 @@ class HFJSpaceEngine:
                     f"{self.lens_target_model}. Use the lens artifact fitted for the loaded Qwen checkpoint."
                 )
                 return
-            lens = jlens.JacobianLens.from_pretrained(self.lens_source, filename=self.lens_artifact)
+            lens = jlens.JacobianLens.from_pretrained(
+                self.lens_source,
+                filename=self.lens_artifact,
+                revision=self.lens_revision,
+            )
             text_config = self.model.config.get_text_config()
             hidden_size = int(text_config.hidden_size)
             if int(lens.d_model) != hidden_size:
@@ -433,7 +448,11 @@ class HFJSpaceEngine:
         try:
             from huggingface_hub import hf_hub_download
 
-            path = hf_hub_download(self.lens_source, self._lens_config_filename(self.lens_artifact))
+            path = hf_hub_download(
+                self.lens_source,
+                self._lens_config_filename(self.lens_artifact),
+                revision=self.lens_revision,
+            )
             with open(path, encoding="utf-8") as handle:
                 for line in handle:
                     stripped = line.strip()

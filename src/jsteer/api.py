@@ -38,13 +38,28 @@ def create_app(engine_mode: str | None = None, static_dir: str | Path | None = N
     )
     app.state.engine = engine
 
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=False,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    cors_origins = [origin.strip() for origin in os.getenv("JSTEER_CORS_ORIGINS", "").split(",") if origin.strip()]
+    if cors_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=cors_origins,
+            allow_credentials=False,
+            allow_methods=["GET", "POST"],
+            allow_headers=["Content-Type"],
+        )
+
+    @app.middleware("http")
+    async def security_headers(request: Request, call_next):
+        response = await call_next(request)
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; img-src 'self' data:; script-src 'self'; "
+            "style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'"
+        )
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        return response
 
     @app.get("/api/health")
     def health() -> dict[str, object]:

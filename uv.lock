@@ -671,7 +671,7 @@ requires-dist = [
     { name = "accelerate", specifier = ">=1.0.0" },
     { name = "fastapi", specifier = ">=0.115.0" },
     { name = "huggingface-hub", specifier = ">=0.33.0" },
-    { name = "jlens", git = "https://github.com/anthropics/jacobian-lens.git" },
+    { name = "jlens", git = "https://github.com/anthropics/jacobian-lens.git?rev=581d398613e5602a5af361e1c34d3a92ea82ba8e" },
     { name = "modal", specifier = ">=1.0.0" },
     { name = "pydantic", specifier = ">=2.9.0" },
     { name = "safetensors", specifier = ">=0.4.5" },
@@ -703,7 +703,7 @@ wheels = [
 [[package]]
 name = "jlens"
 version = "0.1.0"
-source = { git = "https://github.com/anthropics/jacobian-lens.git#581d398613e5602a5af361e1c34d3a92ea82ba8e" }
+source = { git = "https://github.com/anthropics/jacobian-lens.git?rev=581d398613e5602a5af361e1c34d3a92ea82ba8e#581d398613e5602a5af361e1c34d3a92ea82ba8e" }
 dependencies = [
     { name = "huggingface-hub" },
     { name = "numpy" },

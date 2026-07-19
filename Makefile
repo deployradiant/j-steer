@@ -1,8 +1,8 @@
 .PHONY: install build-ui serve deploy test lint
 
 install:
-	uv sync --group dev
-	cd frontend && npm install
+	uv sync --locked --group dev
+	npm ci --prefix frontend
 
 build-ui:
 	cd frontend && npm run build

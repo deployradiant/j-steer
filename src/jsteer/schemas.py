@@ -37,6 +37,7 @@ class JacobianLensInfo(BaseModel):
     available: bool = False
     status: str = "configured"
     source: str = ""
+    revision: str = ""
     artifact: str = ""
     target_model: str = ""
     metadata_model: str | None = None
@@ -93,6 +94,7 @@ class JSpaceInjection(BaseModel):
 class EngineInfo(BaseModel):
     mode: str
     model: str
+    model_revision: str = ""
     layer: int
     device: str = "modal"
     readout: str
@@ -235,6 +237,7 @@ class LensPublic(BaseModel):
     label: str
     description: str
     source: str
+    revision: str
     artifact: str
     target_model: str
     dataset: str

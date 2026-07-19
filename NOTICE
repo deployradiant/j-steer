@@ -1,0 +1,8 @@
+J-Steer
+Copyright 2026 Radiant AI
+
+This product depends on Anthropic's Jacobian lens reference implementation.
+That implementation is licensed separately under the Apache License 2.0.
+
+Model weights and pre-fitted lens artifacts are downloaded at runtime and are
+not distributed as part of this repository. See THIRD_PARTY_NOTICES.md.

@@ -1,0 +1,15 @@
+cff-version: 1.2.0
+message: "If you use J-Steer, cite this software and the Anthropic global-workspace paper."
+title: "J-Steer"
+type: software
+version: 0.1.0
+date-released: 2026-07-19
+license: Apache-2.0
+authors:
+  - name: "Radiant AI"
+repository-code: "https://github.com/deployradiant/j-steer"
+url: "https://koogle-frick--radiant-jsteer.modal.run"
+references:
+  - type: article
+    title: "Verbalizable Representations Form a Global Workspace in Language Models"
+    url: "https://transformer-circuits.pub/2026/workspace/index.html"

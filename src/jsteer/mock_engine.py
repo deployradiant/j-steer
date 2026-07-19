@@ -43,6 +43,7 @@ class MockJSpaceEngine:
         return EngineInfo(
             mode=self.mode,
             model=self.model,
+            model_revision="mock",
             layer=self.layer,
             device=self.device,
             readout=self.readout,
@@ -52,6 +53,7 @@ class MockJSpaceEngine:
                 available=True,
                 status="mock",
                 source="mock-jacobian-lens",
+                revision="mock",
                 artifact="qwen3-1.7b/mock-lens.pt",
                 target_model="mock-qwen3-jspace-proxy",
                 metadata_model="mock-qwen3-jspace-proxy",
