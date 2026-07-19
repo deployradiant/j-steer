@@ -119,10 +119,12 @@ class RunResponse(BaseModel):
     prompt: str
     output: str
     baseline_output: str | None = None
+    decoder_output: str | None = None
     summary: str
     engine: EngineInfo
     frames: list[TraceFrame] = Field(default_factory=list)
     baseline_frames: list[TraceFrame] = Field(default_factory=list)
+    decoder_frames: list[TraceFrame] = Field(default_factory=list)
     interventions: list[Intervention] = Field(default_factory=list)
     jspace_injections: list[JSpaceInjection] = Field(default_factory=list)
     metrics: RunMetrics = Field(default_factory=RunMetrics)

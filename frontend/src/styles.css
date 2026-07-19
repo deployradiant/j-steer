@@ -609,6 +609,26 @@ input::placeholder {
   animation: stream-token-arrive 180ms ease-out;
 }
 
+.rewrite-comparison-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.comparison-arm + .comparison-arm {
+  border-top: 1px solid #d8d8d8;
+}
+
+@media (min-width: 900px) {
+  .rewrite-comparison-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .comparison-arm + .comparison-arm {
+    border-top: 0;
+    border-left: 1px solid #d8d8d8;
+  }
+}
+
 .stream-stop-note {
   display: flex;
   gap: 8px;

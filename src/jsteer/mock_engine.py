@@ -78,9 +78,11 @@ class MockJSpaceEngine:
                     "status": "running",
                     "output": "",
                     "baseline_output": None,
+                    "decoder_output": None,
                     "summary": "Run streaming started.",
                     "frames": [],
                     "baseline_frames": [],
+                    "decoder_frames": [],
                     "interventions": [],
                     "metrics": RunMetrics(prompt_tokens=response.metrics.prompt_tokens),
                 },
@@ -89,6 +91,8 @@ class MockJSpaceEngine:
         }
         for frame in response.baseline_frames:
             yield {"type": "baseline_frame", "frame": frame}
+        for frame in response.decoder_frames:
+            yield {"type": "decoder_frame", "frame": frame}
         for frame in response.frames:
             yield {"type": "frame", "frame": frame}
         yield {"type": "done", "response": response}
@@ -285,6 +289,12 @@ class MockJSpaceEngine:
         monitor_ids = list(profile.suppress_concepts) + [profile.target_concept]
         baseline_frames = self._baseline_frames(request.prompt, monitor_ids)
         baseline_output = self._baseline_rewrite_output(profile.id)
+        decoder_output = profile.control_phrases[0]
+        decoder_frames = self._text_frames(
+            decoder_output,
+            monitor_ids,
+            note="Decoder-only control forces the approved phrase without a hidden-state edit.",
+        )
         frames: list[TraceFrame] = []
         interventions: list[Intervention] = []
         output = self._steered_rewrite_output(profile.id, injections)
@@ -359,6 +369,7 @@ class MockJSpaceEngine:
             prompt=request.prompt,
             output=output,
             baseline_output=baseline_output if request.compare_baseline else None,
+            decoder_output=decoder_output if request.compare_baseline else None,
             summary=(
                 f"{len(interventions)} J-lens-triggered rewrites redirected the response toward "
                 f"{profile.target_label}."
@@ -366,6 +377,7 @@ class MockJSpaceEngine:
             engine=self.info(),
             frames=frames,
             baseline_frames=baseline_frames if request.compare_baseline else [],
+            decoder_frames=decoder_frames if request.compare_baseline else [],
             interventions=interventions,
             jspace_injections=injections,
             metrics=RunMetrics(
@@ -375,6 +387,26 @@ class MockJSpaceEngine:
                 rewrites=len(interventions),
             ),
         )
+
+    def _text_frames(self, text: str, monitor_ids: list[str], note: str) -> list[TraceFrame]:
+        frames: list[TraceFrame] = []
+        generated = ""
+        for step, token in enumerate(text.split()[:48], start=1):
+            generated = f"{generated} {token}".strip()
+            frames.append(
+                self._trace_frame(
+                    step=step,
+                    phase="decode",
+                    layer=self.layer,
+                    token=token,
+                    generated_text=generated,
+                    scores=self._scores_for_prompt(token, monitor_ids, floor=0.2),
+                    action="observe",
+                    note=note,
+                    direct_lens=True,
+                )
+            )
+        return frames
 
     def _safe_monitor_output(self, prompt: str, peak_score: float) -> str:
         if peak_score > 0.48:

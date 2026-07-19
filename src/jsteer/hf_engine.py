@@ -636,12 +636,21 @@ class HFJSpaceEngine:
 
         baseline_text = None
         baseline_frames: list[TraceFrame] = []
+        decoder_text = None
+        decoder_frames: list[TraceFrame] = []
         if request.compare_baseline:
             baseline_text, baseline_frames = self._generate(
                 input_ids=input_ids,
                 request=request,
                 monitor_ids=monitor_ids,
                 steering=None,
+            )
+            decoder_state = self._decoder_control_state(profile, request, injections)
+            decoder_text, decoder_frames = self._generate(
+                input_ids=input_ids,
+                request=request,
+                monitor_ids=monitor_ids,
+                steering=decoder_state,
             )
 
         initial_match = self._rewrite_prompt_match(
@@ -666,10 +675,12 @@ class HFJSpaceEngine:
             prompt=request.prompt,
             output=steered_text,
             baseline_output=baseline_text,
+            decoder_output=decoder_text,
             summary=f"{len(interventions)} J-lens-triggered rewrites applied at layer {self.layer}.",
             engine=self.info(),
             frames=frames,
             baseline_frames=baseline_frames,
+            decoder_frames=decoder_frames,
             interventions=interventions,
             jspace_injections=injections,
             metrics=RunMetrics(
@@ -698,6 +709,8 @@ class HFJSpaceEngine:
 
         baseline_text = None
         baseline_frames: list[TraceFrame] = []
+        decoder_text = None
+        decoder_frames: list[TraceFrame] = []
         if request.compare_baseline:
             for frame in self._iter_generate(
                 input_ids=input_ids,
@@ -708,6 +721,16 @@ class HFJSpaceEngine:
                 baseline_frames.append(frame)
                 baseline_text = frame.generated_text
                 yield {"type": "baseline_frame", "frame": frame}
+            decoder_state = self._decoder_control_state(profile, request, injections)
+            for frame in self._iter_generate(
+                input_ids=input_ids,
+                request=request,
+                monitor_ids=monitor_ids,
+                steering=decoder_state,
+            ):
+                decoder_frames.append(frame)
+                decoder_text = frame.generated_text
+                yield {"type": "decoder_frame", "frame": frame}
 
         initial_match = self._rewrite_prompt_match(
             input_ids,
@@ -738,10 +761,12 @@ class HFJSpaceEngine:
                 prompt=request.prompt,
                 output=steered_text,
                 baseline_output=baseline_text,
+                decoder_output=decoder_text,
                 summary=f"{len(interventions)} J-lens-triggered rewrites applied at layer {self.layer}.",
                 engine=self.info(),
                 frames=frames,
                 baseline_frames=baseline_frames,
+                decoder_frames=decoder_frames,
                 interventions=interventions,
                 jspace_injections=injections,
                 metrics=RunMetrics(
@@ -783,7 +808,7 @@ class HFJSpaceEngine:
         torch = self.torch
         handle = None
         state = steering
-        if state is not None:
+        if state is not None and state.get("activation_edit"):
             handle = self.model.model.layers[self.layer].register_forward_hook(
                 lambda module, inputs, output: self._steering_hook(output, state)
             )
@@ -836,10 +861,10 @@ class HFJSpaceEngine:
                         )
                         return
                 else:
-                    if state is not None:
+                    if state is not None and state.get("activation_edit"):
                         state["pending_match"] = next_match
                 logits = outputs.logits[:, -1, :]
-                if state is not None and state.get("has_rewritten"):
+                if state is not None and state.get("decoder_constraint") and state.get("has_rewritten"):
                     logits = self._apply_control_phrase_bias(logits, state, generated_ids)
                 next_token = self._sample(logits, request.temperature, request.top_p, request.seed + step)
                 token_id = int(next_token.item())
@@ -873,7 +898,11 @@ class HFJSpaceEngine:
                         else None
                     ),
                 )
-                if state is not None and self._control_phrase_complete(state, generated_ids, generated_text):
+                if (
+                    state is not None
+                    and state.get("decoder_constraint")
+                    and self._control_phrase_complete(state, generated_ids, generated_text)
+                ):
                     break
                 current_ids = next_token.reshape(1, 1)
                 attention_mask = torch.cat(
@@ -906,6 +935,8 @@ class HFJSpaceEngine:
             "phrase_sequences": phrase_sequences,
             "phrase_bias": max(0.0, 4.0 + request.strength * 2.2),
             "force_control_phrase": True,
+            "activation_edit": True,
+            "decoder_constraint": False,
             "target_token_ids": self._rewrite_target_token_ids(profile, lookup_injections or []),
             "suppress_token_ids": self._rewrite_suppress_token_ids(profile),
             "strength": request.strength,
@@ -916,6 +947,22 @@ class HFJSpaceEngine:
             "has_rewritten": False,
             "step": 0,
         }
+
+    def _decoder_control_state(
+        self,
+        profile: RewriteProfile,
+        request: RunRequest,
+        lookup_injections: list[JSpaceInjection] | None = None,
+    ) -> dict[str, Any]:
+        state = self._steering_state(profile, request, lookup_injections, initial_match=None)
+        state.update(
+            {
+                "activation_edit": False,
+                "decoder_constraint": True,
+                "has_rewritten": True,
+            }
+        )
+        return state
 
     def _steering_hook(self, output: Any, state: dict[str, Any]) -> Any:
         hidden = output[0] if isinstance(output, tuple) else output
@@ -947,8 +994,7 @@ class HFJSpaceEngine:
                 reason=(
                     f"Anthropic J-lens word {match.matched_token!r} entered the rank cutoff at "
                     f"L{match.layer} rank {match.rank}. The approved-token objective was differentiated "
-                    "through the fitted lens and applied at the control layer; the decoder constraint "
-                    "then stabilized the approved phrase."
+                    "through the fitted lens and applied at the control layer without decoder forcing."
                     + (
                         " Retrieved approved terms were included in the J-lens target objective."
                         if lookup_injections

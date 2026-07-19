@@ -153,9 +153,11 @@ def _events_from_response(response: RunResponse) -> Iterable[dict[str, Any]]:
                 "status": "running",
                 "output": "",
                 "baseline_output": None,
+                "decoder_output": None,
                 "summary": "Run streaming started.",
                 "frames": [],
                 "baseline_frames": [],
+                "decoder_frames": [],
                 "interventions": [],
                 "metrics": RunMetrics(prompt_tokens=response.metrics.prompt_tokens),
             },
@@ -164,6 +166,8 @@ def _events_from_response(response: RunResponse) -> Iterable[dict[str, Any]]:
     }
     for frame in response.baseline_frames:
         yield {"type": "baseline_frame", "frame": frame}
+    for frame in response.decoder_frames:
+        yield {"type": "decoder_frame", "frame": frame}
     for frame in response.frames:
         yield {"type": "frame", "frame": frame}
     yield {"type": "done", "response": response}

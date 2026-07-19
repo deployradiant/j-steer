@@ -78,6 +78,9 @@ def test_rewrite_has_baseline_and_interventions() -> None:
 
     assert response.status == "rewritten"
     assert response.baseline_output
+    assert response.decoder_output
+    assert response.baseline_frames
+    assert response.decoder_frames
     assert response.interventions
     assert response.jspace_injections
     assert response.frames[0].layer_activations

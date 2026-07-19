@@ -143,6 +143,7 @@ interface RunResponse {
   prompt: string;
   output: string;
   baseline_output: string | null;
+  decoder_output: string | null;
   summary: string;
   engine: {
     mode: string;
@@ -154,6 +155,7 @@ interface RunResponse {
   };
   frames: TraceFrame[];
   baseline_frames: TraceFrame[];
+  decoder_frames: TraceFrame[];
   interventions: Intervention[];
   jspace_injections: JSpaceInjection[];
   metrics: {
@@ -186,7 +188,7 @@ interface RunRequestPayload {
 }
 
 interface RunStreamEvent {
-  type: "start" | "frame" | "baseline_frame" | "done" | "error";
+  type: "start" | "frame" | "baseline_frame" | "decoder_frame" | "done" | "error";
   response?: RunResponse;
   frame?: TraceFrame;
   message?: string;
@@ -873,6 +875,9 @@ function renderStatsStrip(items: Array<{ label: string; value: string; tone?: st
 }
 
 function renderStreamedOutput(response: RunResponse, frames: TraceFrame[], selectedFrame: TraceFrame | null): string {
+  if (response.mode === "rewrite" && response.baseline_output !== null) {
+    return renderRewriteComparison(response, frames, selectedFrame);
+  }
   const decodeFrames = response.frames.filter((frame) => frame.phase === "decode");
   const streamedTokens = Math.max(decodeFrames.length, response.metrics.completion_tokens);
   const tokenBudget = Math.max(1, state.lastRunMaxTokens);
@@ -930,6 +935,61 @@ function renderStreamedOutput(response: RunResponse, frames: TraceFrame[], selec
             </div>`
           : ""
       }
+    </section>
+  `;
+}
+
+function renderRewriteComparison(response: RunResponse, frames: TraceFrame[], selectedFrame: TraceFrame | null): string {
+  const selectedStep = selectedFrame?.step ?? frames.at(-1)?.step ?? 0;
+  const arms = [
+    {
+      label: "Baseline",
+      detail: "No hidden-state edit or decoder constraint",
+      output: response.baseline_output ?? "",
+      frames: response.baseline_frames
+    },
+    {
+      label: "J-lens only",
+      detail: "Activation intervention without decoder forcing",
+      output: response.output,
+      frames
+    },
+    {
+      label: "Decoder only",
+      detail: "Approved phrase constraint without activation editing",
+      output: response.decoder_output ?? "",
+      frames: response.decoder_frames
+    }
+  ];
+  return `
+    <section class="border border-line">
+      <div class="border-b border-line bg-field px-3 py-2">
+        <h3 class="text-sm font-semibold">Causal controls</h3>
+        <p class="text-xs text-neutral-500">Same prompt, seed, sampling controls, and token budget</p>
+      </div>
+      <div class="rewrite-comparison-grid">
+        ${arms
+          .map((arm) => {
+            const armFrame = arm.frames.find((frame) => frame.step === selectedStep) ?? arm.frames.at(-1) ?? null;
+            const output = arm.output || arm.frames.at(-1)?.generated_text || "";
+            return `
+              <section class="comparison-arm min-w-0">
+                <div class="border-b border-line bg-field px-3 py-2">
+                  <div class="text-xs font-semibold">${escapeHtml(arm.label)}</div>
+                  <div class="mt-0.5 text-[11px] leading-4 text-neutral-500">${escapeHtml(arm.detail)}</div>
+                </div>
+                <div class="min-h-28 p-3">
+                  ${
+                    output
+                      ? `<p class="whitespace-pre-wrap text-sm leading-6">${renderGeneratedAnswer(arm.frames, armFrame, output)}</p>`
+                      : `<p class="text-sm text-neutral-500">Waiting for this control arm...</p>`
+                  }
+                </div>
+              </section>
+            `;
+          })
+          .join("")}
+      </div>
     </section>
   `;
 }
@@ -1530,7 +1590,7 @@ function currentRunPayload(): RunRequestPayload {
     max_new_tokens: state.maxNewTokens,
     temperature: state.temperature,
     strength: state.strength,
-    compare_baseline: false
+    compare_baseline: state.activeMode === "rewrite"
   };
 }
 
@@ -1542,10 +1602,12 @@ function createStreamingRun(payload: RunRequestPayload): RunResponse {
     prompt: payload.prompt,
     output: "",
     baseline_output: payload.compare_baseline ? "" : null,
+    decoder_output: payload.compare_baseline ? "" : null,
     summary: "Run streaming token readouts from the active decoder.",
     engine: streamingEngineInfo(),
     frames: [],
     baseline_frames: [],
+    decoder_frames: [],
     interventions: [],
     jspace_injections: [],
     metrics: {
@@ -1643,6 +1705,15 @@ function handleRunStreamEvent(event: RunStreamEvent) {
     state.result = result;
     upsertFrame(result.baseline_frames, event.frame);
     result.baseline_output = event.frame.generated_text || result.baseline_output;
+    render();
+    return;
+  }
+
+  if (event.type === "decoder_frame" && event.frame) {
+    const result = state.result ?? createStreamingRun(currentRunPayload());
+    state.result = result;
+    upsertFrame(result.decoder_frames, event.frame);
+    result.decoder_output = event.frame.generated_text || result.decoder_output;
     render();
     return;
   }

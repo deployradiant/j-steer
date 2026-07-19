@@ -144,6 +144,10 @@ def test_rewrite_includes_triggered_lookup_injection() -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "rewritten"
+    assert body["baseline_output"]
+    assert body["decoder_output"]
+    assert body["baseline_frames"]
+    assert body["decoder_frames"]
     assert body["jspace_injections"]
     assert body["jspace_injections"][0]["target"] == "rewrite_controller"
     assert "Retrieved context" in body["output"]
