@@ -27,6 +27,22 @@ def test_profiles_endpoint() -> None:
     assert body["scenarios"]
     assert body["lenses"][0]["id"] == body["default_lens_id"]
     assert body["lenses"][0]["target_model"] == "Qwen/Qwen3-1.7B"
+    assert body["rewrite_profiles"][0]["unsafe_words"]
+    assert body["rewrite_profiles"][0]["replacement_words"]
+
+
+def test_policy_term_validation_endpoint() -> None:
+    client = TestClient(create_app(engine_mode="mock"))
+    response = client.post(
+        "/api/policy-terms/validate",
+        json={"terms": ["secret", "audit trail"]},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["terms"][0]["valid"] is True
+    assert body["terms"][0]["token_id"] is not None
+    assert body["terms"][1]["valid"] is False
 
 
 def test_run_rejects_unknown_lens() -> None:

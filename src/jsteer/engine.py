@@ -5,7 +5,15 @@ from collections.abc import Iterable
 from typing import Protocol
 
 from .mock_engine import MockJSpaceEngine
-from .schemas import CustomLensRequest, CustomLensResponse, EngineInfo, RunRequest, RunResponse
+from .schemas import (
+    CustomLensRequest,
+    CustomLensResponse,
+    EngineInfo,
+    PolicyTermValidationRequest,
+    PolicyTermValidationResponse,
+    RunRequest,
+    RunResponse,
+)
 
 
 class JSpaceEngine(Protocol):
@@ -16,6 +24,8 @@ class JSpaceEngine(Protocol):
     def stream_run(self, request: RunRequest) -> Iterable[dict[str, object]]: ...
 
     def custom_lens(self, request: CustomLensRequest) -> CustomLensResponse: ...
+
+    def validate_policy_terms(self, request: PolicyTermValidationRequest) -> PolicyTermValidationResponse: ...
 
 
 def create_engine(mode: str | None = None) -> JSpaceEngine:

@@ -17,6 +17,8 @@ This monitor does not fit a custom concept lens and does not use the repo's cali
 
 The right model-state rail owns lens selection. The API publishes only artifacts compatible with the deployed checkpoint, and every run includes a validated `lens_id`. The current Qwen3-1.7B collection contains one compatible published fit, so the selector has one honest option rather than suggesting that a lens fitted for a different model can be swapped in.
 
+Tripwire and Rewrite policies are explicit word lists. The UI validates every edited term with the deployed Qwen tokenizer and displays its vocabulary ID; terms that split into multiple tokens cannot start a run. Rewrite uses the validated unsafe list as source-coordinate candidates and the validated replacement list as target-coordinate candidates.
+
 `Rewrite` starts with the same direct per-layer vocabulary-rank filter. When an unsafe word enters the cutoff, J-Steer differentiates that token and the strongest approved token through `unembed(J_l @ h_l)` to obtain two local J-lens directions. It then follows the paper's coordinate intervention: solve `c = V^+ h` for `V = [v_source, v_target]`, swap the two entries of `c`, and apply `h' = h + scale * V(swap(c) - c)`. The component of the residual outside that two-direction span is unchanged. Retrieved approved terms can join the target selector. The synchronized decoder-only arm remains visible as a separate control; it is not mixed into the primary J-lens arm.
 
 The older calibrated concept-vector implementation remains in `hf_engine.py` as inactive comparison prior art. The legacy `/api/custom-lens` endpoint also remains available for comparison experiments, but it is not exposed in the primary demo UI and is not used by either primary mode.

@@ -23,6 +23,9 @@ from .schemas import (
     JacobianLensInfo,
     JSpaceInjection,
     LayerActivation,
+    PolicyTermValidation,
+    PolicyTermValidationRequest,
+    PolicyTermValidationResponse,
     RunMetrics,
     RunRequest,
     RunResponse,
@@ -116,6 +119,7 @@ class HFJSpaceEngine:
     def run(self, request: RunRequest) -> RunResponse:
         self._validate_lens_selection(request.lens_id)
         self._ensure_loaded()
+        self._require_valid_policy_terms(request)
         started = time.perf_counter()
         if request.mode == "rewrite":
             response = self._run_rewrite(request)
@@ -127,6 +131,7 @@ class HFJSpaceEngine:
     def stream_run(self, request: RunRequest) -> Iterator[dict[str, Any]]:
         self._validate_lens_selection(request.lens_id)
         self._ensure_loaded()
+        self._require_valid_policy_terms(request)
         started = time.perf_counter()
         run_id = str(uuid.uuid4())
         yield {"type": "start", "response": self._running_response(run_id, request)}
@@ -134,6 +139,52 @@ class HFJSpaceEngine:
             yield from self._stream_rewrite(request, run_id, started)
         else:
             yield from self._stream_monitor(request, run_id, started)
+
+    def validate_policy_terms(
+        self,
+        request: PolicyTermValidationRequest,
+    ) -> PolicyTermValidationResponse:
+        self._ensure_loaded()
+        return PolicyTermValidationResponse(
+            tokenizer_model=self.model_name,
+            terms=[self._validate_policy_term(term) for term in request.terms],
+        )
+
+    def _require_valid_policy_terms(self, request: RunRequest) -> None:
+        terms = [*request.unsafe_words, *request.replacement_words]
+        invalid = [item for item in (self._validate_policy_term(term) for term in terms) if not item.valid]
+        if invalid:
+            details = "; ".join(f"{item.term!r}: {item.reason}" for item in invalid)
+            raise ValueError(f"Policy terms must each map to one Qwen token. {details}")
+
+    def _validate_policy_term(self, raw_term: str) -> PolicyTermValidation:
+        assert self.tokenizer is not None
+        term = raw_term.strip()
+        if not term:
+            return PolicyTermValidation(
+                term=raw_term,
+                valid=False,
+                token_count=0,
+                reason="Empty terms are not valid policy words.",
+            )
+        single_token_ids = self._single_token_ids_for_term(term)
+        if single_token_ids:
+            token_id = single_token_ids[0]
+            return PolicyTermValidation(
+                term=term,
+                valid=True,
+                token_id=token_id,
+                decoded_token=self._decode_token(token_id),
+                token_count=1,
+                reason="Exact single-token Qwen vocabulary entry.",
+            )
+        token_count = len(self.tokenizer.encode(term, add_special_tokens=False))
+        return PolicyTermValidation(
+            term=term,
+            valid=False,
+            token_count=token_count,
+            reason=f"Qwen splits this term into {token_count} tokens.",
+        )
 
     def _running_response(self, run_id: str, request: RunRequest) -> RunResponse:
         return RunResponse(
@@ -402,8 +453,14 @@ class HFJSpaceEngine:
         hidden_states: Any,
         monitor_ids: list[str],
         rank_threshold: int,
+        unsafe_words: list[str] | None = None,
     ) -> TraceFrame:
-        layer_readouts = self._jlens_layer_readouts(hidden_states, monitor_ids, rank_threshold)
+        layer_readouts = self._jlens_layer_readouts(
+            hidden_states,
+            monitor_ids,
+            rank_threshold,
+            unsafe_words,
+        )
         scores = self._lens_match_scores(layer_readouts)
         control_readout = min(
             layer_readouts,
@@ -438,6 +495,7 @@ class HFJSpaceEngine:
             outputs.hidden_states,
             monitor_ids,
             request.lens_rank_threshold,
+            request.unsafe_words or None,
         )
         peak_score = self._frame_peak(prompt_frame)
         frames = [prompt_frame]
@@ -530,6 +588,7 @@ class HFJSpaceEngine:
             outputs.hidden_states,
             monitor_ids,
             request.lens_rank_threshold,
+            request.unsafe_words or None,
         )
         peak_score = self._frame_peak(prompt_frame)
         frames = [prompt_frame]
@@ -657,6 +716,7 @@ class HFJSpaceEngine:
             input_ids,
             list(profile.suppress_concepts),
             request.lens_rank_threshold,
+            request.unsafe_words or None,
         )
         steering = self._steering_state(profile, request, injections, initial_match)
         steered_text, frames = self._generate(
@@ -736,6 +796,7 @@ class HFJSpaceEngine:
             input_ids,
             list(profile.suppress_concepts),
             request.lens_rank_threshold,
+            request.unsafe_words or None,
         )
         steering = self._steering_state(profile, request, injections, initial_match)
         frames: list[TraceFrame] = []
@@ -832,6 +893,7 @@ class HFJSpaceEngine:
                     outputs.hidden_states,
                     monitor_ids,
                     request.lens_rank_threshold,
+                    request.unsafe_words or None,
                 )
                 scores = self._lens_match_scores(layer_readouts)
                 proxy_scores: list[ConceptScore] = []
@@ -937,8 +999,12 @@ class HFJSpaceEngine:
             "force_control_phrase": True,
             "activation_edit": True,
             "decoder_constraint": False,
-            "target_token_ids": self._rewrite_target_token_ids(profile, lookup_injections or []),
-            "suppress_token_ids": self._rewrite_suppress_token_ids(profile),
+            "target_token_ids": self._rewrite_target_token_ids(
+                profile,
+                lookup_injections or [],
+                request.replacement_words,
+            ),
+            "suppress_token_ids": self._rewrite_suppress_token_ids(profile, request.unsafe_words),
             "strength": request.strength,
             "pending_match": initial_match,
             "interventions": [],
@@ -1017,18 +1083,29 @@ class HFJSpaceEngine:
         input_ids: Any,
         concept_ids: list[str],
         rank_threshold: int,
+        unsafe_words: list[str] | None = None,
     ) -> LayerActivation | None:
         outputs = self._forward(input_ids, output_hidden_states=True)
-        readouts = self._jlens_layer_readouts(outputs.hidden_states, concept_ids, rank_threshold)
+        readouts = self._jlens_layer_readouts(
+            outputs.hidden_states,
+            concept_ids,
+            rank_threshold,
+            unsafe_words,
+        )
         return self._best_ranked_readout(readouts)
 
     def _rewrite_target_token_ids(
         self,
         profile: RewriteProfile,
         lookup_injections: list[JSpaceInjection],
+        replacement_words: list[str] | None = None,
     ) -> list[int]:
         assert self.tokenizer is not None
-        token_ids = list(self._single_token_policy_terms(CONCEPTS[profile.target_concept]))
+        token_ids = (
+            self._policy_term_token_ids(replacement_words)
+            if replacement_words
+            else list(self._single_token_policy_terms(CONCEPTS[profile.target_concept]))
+        )
         texts = [item.injected_text for item in lookup_injections[:3]]
         for text in texts:
             for term in text.replace(".", " ").replace(",", " ").split():
@@ -1038,12 +1115,38 @@ class HFJSpaceEngine:
                         token_ids.append(int(encoded[0]))
         return list(dict.fromkeys(token_ids))[:96]
 
-    def _rewrite_suppress_token_ids(self, profile: RewriteProfile) -> list[int]:
+    def _rewrite_suppress_token_ids(
+        self,
+        profile: RewriteProfile,
+        unsafe_words: list[str] | None = None,
+    ) -> list[int]:
+        if unsafe_words:
+            return self._policy_term_token_ids(unsafe_words)
         token_ids = [
             token_id
             for concept_id in profile.suppress_concepts
             for token_id in self._single_token_policy_terms(CONCEPTS[concept_id])
         ]
+        return list(dict.fromkeys(token_ids))
+
+    def _policy_term_token_ids(self, terms: list[str]) -> list[int]:
+        token_ids = [
+            token_id
+            for term in terms
+            for token_id in self._single_token_ids_for_term(term)
+        ]
+        return list(dict.fromkeys(token_ids))
+
+    def _single_token_ids_for_term(self, raw_term: str) -> list[int]:
+        assert self.tokenizer is not None
+        term = raw_term.strip()
+        if not term:
+            return []
+        token_ids: list[int] = []
+        for variant in (term, f" {term}"):
+            encoded = self.tokenizer.encode(variant, add_special_tokens=False)
+            if len(encoded) == 1:
+                token_ids.append(int(encoded[0]))
         return list(dict.fromkeys(token_ids))
 
     def _matched_policy_token_id(self, match: LayerActivation, suppress_token_ids: list[int]) -> int:
@@ -1485,12 +1588,13 @@ class HFJSpaceEngine:
         hidden_states: Any,
         concept_ids: list[str],
         rank_threshold: int,
+        policy_terms: list[str] | None = None,
     ) -> list[LayerActivation]:
         """Decode every fitted layer and mark policy words by vocabulary rank."""
         if self.jacobian_lens is None or self.torch is None:
             raise RuntimeError("Anthropic Jacobian lens is required for monitoring but is unavailable.")
 
-        policy_tokens = self._lens_policy_token_lookup(concept_ids)
+        policy_tokens = self._lens_policy_token_lookup(concept_ids, policy_terms)
         residuals = self.torch.stack(
             [
                 self._layer_vector(hidden_states[layer + 1], prompt_window=1)
@@ -1551,14 +1655,37 @@ class HFJSpaceEngine:
             )
         return rows
 
-    def _lens_policy_token_lookup(self, concept_ids: list[str]) -> dict[int, tuple[ConceptSpec, str]]:
+    def _lens_policy_token_lookup(
+        self,
+        concept_ids: list[str],
+        policy_terms: list[str] | None = None,
+    ) -> dict[int, tuple[ConceptSpec, str]]:
         lookup: dict[int, tuple[ConceptSpec, str]] = {}
+        allowed_terms = {term.strip().casefold() for term in policy_terms or [] if term.strip()}
+        assigned_terms: set[str] = set()
         for concept_id in concept_ids:
             concept = CONCEPTS.get(concept_id)
             if concept is None or concept.polarity != "risk":
                 continue
             for token_id, term in self._single_token_policy_terms(concept).items():
+                if policy_terms is not None and term.casefold() not in allowed_terms:
+                    continue
                 lookup.setdefault(token_id, (concept, term))
+                assigned_terms.add(term.casefold())
+
+        custom_terms = [term for term in policy_terms or [] if term.strip().casefold() not in assigned_terms]
+        if custom_terms:
+            custom_policy = ConceptSpec(
+                id="custom_policy",
+                label="Custom Policy Word",
+                description="User-supplied single-token Qwen vocabulary filter.",
+                polarity="risk",
+                keywords=tuple(custom_terms),
+                calibration_prompts=(),
+            )
+            for term in custom_terms:
+                for token_id in self._single_token_ids_for_term(term):
+                    lookup.setdefault(token_id, (custom_policy, term.strip()))
         return lookup
 
     def _single_token_policy_terms(self, concept: ConceptSpec) -> dict[int, str]:

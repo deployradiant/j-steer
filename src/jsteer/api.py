@@ -17,7 +17,16 @@ from fastapi.staticfiles import StaticFiles
 from .concepts import SCENARIOS, public_concepts, public_rewrite_profiles
 from .engine import create_engine
 from .lenses import DEFAULT_LENS_ID, public_lenses
-from .schemas import CustomLensRequest, CustomLensResponse, ProfilesResponse, RunMetrics, RunRequest, RunResponse
+from .schemas import (
+    CustomLensRequest,
+    CustomLensResponse,
+    PolicyTermValidationRequest,
+    PolicyTermValidationResponse,
+    ProfilesResponse,
+    RunMetrics,
+    RunRequest,
+    RunResponse,
+)
 
 
 def create_app(engine_mode: str | None = None, static_dir: str | Path | None = None) -> FastAPI:
@@ -55,6 +64,18 @@ def create_app(engine_mode: str | None = None, static_dir: str | Path | None = N
     async def run(request: RunRequest) -> RunResponse:
         try:
             result = engine.run(request)
+            if inspect.isawaitable(result):
+                result = await result
+            return result
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.post("/api/policy-terms/validate", response_model=PolicyTermValidationResponse)
+    async def validate_policy_terms(request: PolicyTermValidationRequest) -> PolicyTermValidationResponse:
+        try:
+            result = engine.validate_policy_terms(request)
             if inspect.isawaitable(result):
                 result = await result
             return result

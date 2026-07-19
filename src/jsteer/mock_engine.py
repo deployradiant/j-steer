@@ -20,6 +20,9 @@ from .schemas import (
     JacobianLensInfo,
     JSpaceInjection,
     LayerActivation,
+    PolicyTermValidation,
+    PolicyTermValidationRequest,
+    PolicyTermValidationResponse,
     RunMetrics,
     RunRequest,
     RunResponse,
@@ -60,6 +63,16 @@ class MockJSpaceEngine:
     def run(self, request: RunRequest) -> RunResponse:
         if request.lens_id != DEFAULT_LENS_ID:
             raise ValueError(f"Unsupported lens {request.lens_id!r}.")
+        invalid = [
+            item
+            for item in self.validate_policy_terms(
+                PolicyTermValidationRequest(terms=[*request.unsafe_words, *request.replacement_words] or ["policy"])
+            ).terms
+            if not item.valid
+        ]
+        if invalid:
+            details = "; ".join(f"{item.term!r}: {item.reason}" for item in invalid)
+            raise ValueError(f"Policy terms must each map to one Qwen token. {details}")
         started = time.perf_counter()
         if request.mode == "rewrite":
             response = self._run_rewrite(request)
@@ -68,6 +81,30 @@ class MockJSpaceEngine:
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         response.metrics.latency_ms = max(elapsed_ms, 80)
         return response
+
+    def validate_policy_terms(
+        self,
+        request: PolicyTermValidationRequest,
+    ) -> PolicyTermValidationResponse:
+        validations: list[PolicyTermValidation] = []
+        for raw_term in request.terms:
+            term = raw_term.strip()
+            valid = bool(term) and len(term.split()) == 1
+            validations.append(
+                PolicyTermValidation(
+                    term=term or raw_term,
+                    valid=valid,
+                    token_id=sum(ord(character) for character in term) % 150_000 if valid else None,
+                    decoded_token=term if valid else None,
+                    token_count=1 if valid else len(term.split()),
+                    reason=(
+                        "Deterministic mock single-token entry."
+                        if valid
+                        else "Mock tokenizer requires one non-empty word."
+                    ),
+                )
+            )
+        return PolicyTermValidationResponse(tokenizer_model=f"{self.model} (mock)", terms=validations)
 
     def stream_run(self, request: RunRequest):
         response = self.run(request)

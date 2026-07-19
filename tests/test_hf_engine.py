@@ -63,6 +63,26 @@ def test_direct_lens_match_prefers_best_vocabulary_rank() -> None:
     assert scores[0].evidence == ["leak", "L14 rank 4"]
 
 
+def test_policy_term_validation_uses_single_qwen_token_variant() -> None:
+    class FakeTokenizer:
+        def encode(self, text: str, add_special_tokens: bool = False) -> list[int]:
+            del add_special_tokens
+            return {"secret": [10, 11], " secret": [42]}.get(text, [1, 2])
+
+        def decode(self, token_ids: list[int], skip_special_tokens: bool = True) -> str:
+            del skip_special_tokens
+            return " secret" if token_ids == [42] else ""
+
+    engine = HFJSpaceEngine()
+    engine.tokenizer = FakeTokenizer()
+
+    validation = engine._validate_policy_term("secret")
+
+    assert validation.valid is True
+    assert validation.token_id == 42
+    assert validation.decoded_token == "secret"
+
+
 def test_rewrite_swaps_jlens_coordinates_and_preserves_orthogonal_residual() -> None:
     class LinearLensModel:
         def __init__(self, unembedding: torch.Tensor) -> None:

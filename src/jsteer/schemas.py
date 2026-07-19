@@ -99,6 +99,8 @@ class RunRequest(BaseModel):
     mode: RunMode = "monitor"
     prompt: str = Field(min_length=1, max_length=8000)
     monitor_ids: list[str] = Field(default_factory=list)
+    unsafe_words: list[str] = Field(default_factory=list, max_length=32)
+    replacement_words: list[str] = Field(default_factory=list, max_length=32)
     rewrite_profile_id: str | None = None
     action: MonitorAction = "kill"
     threshold: float = Field(default=0.66, ge=0.05, le=0.99)
@@ -110,6 +112,24 @@ class RunRequest(BaseModel):
     strength: float = Field(default=1.0, ge=0.0, le=2.0)
     compare_baseline: bool = True
     seed: int = Field(default=7, ge=0)
+
+
+class PolicyTermValidationRequest(BaseModel):
+    terms: list[str] = Field(min_length=1, max_length=64)
+
+
+class PolicyTermValidation(BaseModel):
+    term: str
+    valid: bool
+    token_id: int | None = None
+    decoded_token: str | None = None
+    token_count: int = Field(ge=0)
+    reason: str
+
+
+class PolicyTermValidationResponse(BaseModel):
+    tokenizer_model: str
+    terms: list[PolicyTermValidation]
 
 
 class RunResponse(BaseModel):
@@ -178,6 +198,8 @@ class RewriteProfilePublic(BaseModel):
     description: str
     target_label: str
     suppress_labels: list[str]
+    unsafe_words: list[str]
+    replacement_words: list[str]
     default_strength: float
     demo_prompt: str
     control_phrases: list[str]
@@ -189,6 +211,7 @@ class ScenarioPublic(BaseModel):
     label: str
     prompt: str
     monitor_ids: list[str] = Field(default_factory=list)
+    unsafe_words: list[str] = Field(default_factory=list)
     rewrite_profile_id: str | None = None
     action: MonitorAction = "kill"
     threshold: float = 0.66
