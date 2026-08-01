@@ -445,7 +445,7 @@ function policyLabel(): string {
 }
 
 function renderNavigationSidebar(): string {
-  const collapsed = state.modeRailCollapsed;
+  const collapsed = state.modeRailCollapsed && !isMobileWorkbench();
   const headerLayout = collapsed ? "justify-center px-0" : "justify-center px-3";
   const togglePosition = collapsed ? "" : "absolute right-2";
   return `
@@ -467,6 +467,7 @@ function renderNavigationSidebar(): string {
 function renderPromptWorkspace(): string {
   return `
     <section class="border border-line bg-panel shadow-crisp">
+      ${renderMobileLensPicker()}
       ${renderScenarioPicker()}
       ${renderPolicyControls()}
       <div class="p-3">
@@ -482,6 +483,35 @@ function renderPromptWorkspace(): string {
     <section class="border border-line bg-panel shadow-crisp">
       ${renderResults()}
     </section>
+  `;
+}
+
+function isMobileWorkbench(): boolean {
+  return window.matchMedia("(max-width: 1199px)").matches;
+}
+
+function lensOptions(): string {
+  const lenses = state.profiles?.lenses ?? [];
+  return lenses.length
+    ? lenses
+        .map(
+          (lens) => `<option value="${escapeHtml(lens.id)}" ${lens.id === state.selectedLensId ? "selected" : ""}>${escapeHtml(lens.label)}</option>`
+        )
+        .join("")
+    : `<option>Loading compatible lenses...</option>`;
+}
+
+function renderMobileLensPicker(): string {
+  return `
+    <div class="mobile-lens-picker border-b border-line bg-field p-3">
+      <div class="mb-1.5 flex items-center justify-between gap-3">
+        <label for="mobile-lens-picker-select" class="text-[10px] font-semibold uppercase tracking-normal text-neutral-500">Published lens</label>
+        <span class="text-[11px] font-semibold text-neutral-500">${escapeHtml(lensPairText())} / ${escapeHtml(lensStatusText())}</span>
+      </div>
+      <select id="mobile-lens-picker-select" data-lens-picker class="h-11 w-full border border-line bg-white px-2 text-sm font-semibold outline-none focus:border-ink${lockedClass()}" ${lockedAttr()}>
+        ${lensOptions()}
+      </select>
+    </div>
   `;
 }
 
@@ -562,18 +592,11 @@ function renderModelStateRail(): string {
 function renderLensPickerControls(): string {
   const lenses = state.profiles?.lenses ?? [];
   const selected = lenses.find((lens) => lens.id === state.selectedLensId) ?? lenses[0];
-  const options = lenses.length
-    ? lenses
-        .map(
-          (lens) => `<option value="${escapeHtml(lens.id)}" ${lens.id === state.selectedLensId ? "selected" : ""}>${escapeHtml(lens.label)}</option>`
-        )
-        .join("")
-    : `<option>Loading compatible lenses...</option>`;
   return `
-    <div class="border-b border-line p-3">
+    <div class="rail-lens-picker border-b border-line p-3">
       <label for="lens-picker-select" class="mb-1.5 block text-[10px] font-semibold uppercase tracking-normal text-neutral-500">Published lens</label>
-      <select id="lens-picker-select" class="h-10 w-full border border-line bg-white px-2 text-xs font-semibold outline-none focus:border-ink${lockedClass()}" ${lockedAttr()}>
-        ${options}
+      <select id="lens-picker-select" data-lens-picker class="h-10 w-full border border-line bg-white px-2 text-xs font-semibold outline-none focus:border-ink${lockedClass()}" ${lockedAttr()}>
+        ${lensOptions()}
       </select>
       ${selected ? `<p class="mt-2 text-xs leading-5 text-neutral-600">${escapeHtml(selected.description)}</p>` : ""}
     </div>
@@ -701,7 +724,7 @@ function renderJSpaceInjection(injection: JSpaceInjection): string {
 
 function tabButton(mode: AppMode, icon: string, label: string): string {
   const active = state.activeMode === mode;
-  const collapsed = state.modeRailCollapsed;
+  const collapsed = state.modeRailCollapsed && !isMobileWorkbench();
   const classes = [
     "mode-tab flex w-full border-b border-line",
     lockedClass().trim(),
@@ -747,12 +770,12 @@ function renderScenarioButton(scenario: ScenarioPublic): string {
 function renderMonitorControls(): string {
   return `
     <div class="border-b border-line p-3">
-      <div class="flex items-center justify-between gap-3">
+      <div class="policy-header flex items-center justify-between gap-3">
         <div>
           <label class="text-xs font-semibold uppercase tracking-normal text-neutral-500">Tripwire policy</label>
           <p class="mt-0.5 text-xs text-neutral-500">Every valid word is checked against each layer's J-lens vocabulary ranking.</p>
         </div>
-        <div class="grid grid-cols-2 border border-line bg-field p-0.5 text-xs font-semibold">
+        <div class="policy-action-toggle grid grid-cols-2 border border-line bg-field p-0.5 text-xs font-semibold">
           ${actionButton("kill", "Kill")}
           ${actionButton("observe", "Observe")}
         </div>
@@ -858,7 +881,7 @@ function skeletonLine(label: string): string {
 function renderResults(): string {
   if (!state.result) {
     return `
-      <div class="flex items-center justify-between gap-3 border-b border-line p-3">
+      <div class="run-summary-header flex items-center justify-between gap-3 border-b border-line p-3">
         <div>
           <div class="text-[10px] font-semibold uppercase tracking-normal text-neutral-500">Run Summary</div>
           <p class="mt-0.5 text-sm">Ready to stream from Modal/Qwen.</p>
@@ -883,7 +906,7 @@ function renderResults(): string {
   const visibleFrames = response.frames.slice(0, state.replayCount);
   const inspectedFrame = selectedTraceFrame(visibleFrames);
   return `
-    <div class="flex items-center justify-between gap-3 border-b border-line p-3">
+    <div class="run-summary-header flex items-center justify-between gap-3 border-b border-line p-3">
       <div class="min-w-0">
         <div class="text-[10px] font-semibold uppercase tracking-normal text-neutral-500">Run Summary</div>
         <p class="mt-0.5 truncate text-sm" title="${escapeHtml(response.summary)}">${escapeHtml(response.summary)}</p>
@@ -1376,7 +1399,7 @@ function renderInterventionTokenDelta(
   probabilityAfter: number
 ): string {
   return `
-    <div class="flex items-center justify-between gap-3 border-b border-line px-2 py-1.5">
+    <div class="intervention-delta flex items-center justify-between gap-3 border-b border-line px-2 py-1.5">
       <span class="font-semibold">${label}</span>
       <span class="font-mono text-neutral-600">#${rankBefore} -&gt; #${rankAfter} · ${formatProbability(probabilityBefore)} -&gt; ${formatProbability(probabilityAfter)}</span>
     </div>
@@ -1526,11 +1549,13 @@ function bindEvents() {
     });
   });
 
-  document.querySelector<HTMLSelectElement>("#lens-picker-select")?.addEventListener("change", (event) => {
-    state.selectedLensId = (event.currentTarget as HTMLSelectElement).value;
-    state.result = null;
-    state.inspectedStep = null;
-    render();
+  document.querySelectorAll<HTMLSelectElement>("[data-lens-picker]").forEach((select) => {
+    select.addEventListener("change", (event) => {
+      state.selectedLensId = (event.currentTarget as HTMLSelectElement).value;
+      state.result = null;
+      state.inspectedStep = null;
+      render();
+    });
   });
 
   document.querySelectorAll<HTMLButtonElement>("[data-scenario]").forEach((button) => {
@@ -2135,4 +2160,5 @@ function escapeHtml(value: string): string {
     .replaceAll("'", "&#039;");
 }
 
+window.matchMedia("(max-width: 1199px)").addEventListener("change", render);
 loadInitialData();
